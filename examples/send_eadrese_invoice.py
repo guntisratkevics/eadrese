@@ -1,6 +1,6 @@
-"""Sends an e-invoice (XML+PDF) to the e-adrese DIV sandbox
-and prints the returned message ID.
-"""
+## ☛ `examples/send_eadrese_invoice.py`
+```python
+"""Sends an e‑invoice (XML + PDF) to e‑adrese DIV sandbox and prints message ID."""
 from pathlib import Path
 from latvian_einvoice import (
     Attachment,
@@ -8,23 +8,27 @@ from latvian_einvoice import (
     EAddressConfig,
 )
 
-# --- credentials ---------------------------------------------------------
+# Sandbox (DIV) credentials – replace with real ones in production
 cfg = EAddressConfig(
-    client_id="your-sandbox-client",
-    client_secret="your-sandbox-secret",
-    verify_ssl=False,              # DIV sandbox often uses self-signed certs
+    client_id="demo-client",
+    client_secret="demo-secret",
+    verify_ssl=False,  # DIV sandbox may use self‑signed certs
 )
 
 client = EAddressClient(cfg)
 
-# --- attachments ---------------------------------------------------------
+# Prepare attachments
 xml_attachment = Attachment.from_file(Path("sample.xml"), "application/xml")
 pdf_attachment = Attachment.from_file(Path("sample.pdf"), "application/pdf")
 
-# --- send ---------------------------------------------------------------
-recipient_code = "010170-12345"      # personal code published by VDAA for tests
+# Send message
+audience_code = "010170-12345"  # test recipient personal code in DIV
 msg_id = client.send_message(
-    recipient_personal_code=recipient_code,
+    recipient_personal_code=audience_code,
     attachments=[xml_attachment, pdf_attachment],
 )
-print("Message sent. ID:", msg_id)
+
+print("Message sent successfully, ID:", msg_id)
+```
+
+---
