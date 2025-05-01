@@ -12,6 +12,11 @@ from .eds_client import (
     EDSConfig,
     EDSError,
 )
+from importlib.metadata import version as _v, PackageNotFoundError
+try:
+    __version__ = _v(__name__)
+except PackageNotFoundError:
+    __version__ = "0.0.0+editable"
 
 __all__ = [
     # e‑adrese
