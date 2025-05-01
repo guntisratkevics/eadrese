@@ -1,0 +1,32 @@
+## ☛ `pyproject.toml`
+```toml
+[project]
+name = "latvian-einvoice"
+version = "0.2.0"
+description = "Unified Python SDK for Latvia's e-adrese (VRAA VUS) and VID EDS e-Invoice API"
+authors = [
+  { name = "guntisratkevics", email = "guntis.rat@gmail.com" }
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+  "zeep>=4.2",
+  "requests>=2.31",
+  "python-dateutil>=2.9",
+  "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+async = ["httpx>=0.27"]
+
+[project.urls]
+"Homepage" = "https://github.com/guntisratkevics/eadrese"
+"Bug Tracker" = "https://github.com/guntisratkevics/eadrese/issues"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+```
+
+---
