@@ -1,6 +1,6 @@
 ## ☛ `README.md`
 ```markdown
-# latvian‑eadrese
+# latvian‑einvoice
 
 One pip‑installable client for the two official Latvian e‑invoice channels:
 
