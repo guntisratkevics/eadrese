@@ -1,0 +1,6 @@
+## ☛ `.github/workflows/ci.yml`
+```yaml
+# unchanged – installs package & runs pytest
+```
+
+---
