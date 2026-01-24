@@ -1,13 +1,11 @@
-## ☛ `latvian_einvoice/eds_client.py`
-```python
-"""Thin wrapper for VID EDS e‑Invoice REST API (Swagger v2, 2025‑02‑14)."""
+"""Thin wrapper for VID EDS e-Invoice REST API (Swagger v2, 2025-02-14)."""
 from __future__ import annotations
 
 import datetime as _dt
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import requests
 from dateutil import tz
@@ -32,7 +30,7 @@ class EDSError(RuntimeError):
         self.response = response
 
 
-dataclass
+@dataclass
 class EDSConfig:
     """Credentials & endpoints for VID EDS API."""
 
@@ -61,7 +59,7 @@ class EDSClient:
     # ------------------------------------------------------------------
 
     def send_invoice(self, xml_bytes: bytes) -> str:
-        """POST /einvoice – returns EDS document GUID."""
+        """POST /einvoice - returns EDS document GUID."""
         token = self._ensure_token()
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/xml"}
         url = f"{self.cfg.base_url}/einvoice"
@@ -87,7 +85,7 @@ class EDSClient:
         now = _dt.datetime.now(tz=_tz_riga())
         if self._token and self._token_expiry and now < self._token_expiry - _dt.timedelta(seconds=60):
             return self._token
-        logger.debug("Fetching new EDS OAuth token…")
+        logger.debug("Fetching new EDS OAuth token")
         resp = self._s.post(
             self.cfg.token_url,
             data={
@@ -103,6 +101,3 @@ class EDSClient:
         self._token = data["access_token"]
         self._token_expiry = now + _dt.timedelta(seconds=data.get("expires_in", 3600))
         return self._token
-```
-
----

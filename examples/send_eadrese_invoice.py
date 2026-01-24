@@ -1,18 +1,13 @@
-## ☛ `examples/send_eadrese_invoice.py`
-```python
-"""Sends an e‑invoice (XML + PDF) to e‑adrese DIV sandbox and prints message ID."""
+"""Sends an e-invoice (XML + PDF) to e-adrese DIV sandbox and prints message ID."""
 from pathlib import Path
-from latvian_einvoice import (
-    Attachment,
-    EAddressClient,
-    EAddressConfig,
-)
 
-# Sandbox (DIV) credentials – replace with real ones in production
+from latvian_einvoice import Attachment, EAddressClient, EAddressConfig
+
+# Sandbox (DIV) credentials - replace with real ones in production
 cfg = EAddressConfig(
     client_id="demo-client",
     client_secret="demo-secret",
-    verify_ssl=False,  # DIV sandbox may use self‑signed certs
+    verify_ssl=False,  # DIV sandbox may use self-signed certs
 )
 
 client = EAddressClient(cfg)
@@ -29,6 +24,3 @@ msg_id = client.send_message(
 )
 
 print("Message sent successfully, ID:", msg_id)
-```
-
----
