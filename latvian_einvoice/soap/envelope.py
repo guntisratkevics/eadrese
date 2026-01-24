@@ -74,15 +74,34 @@ def build_envelope(
         "TraceInfo": {"TraceInfoEntry": [{"TraceInfoID": "Trace1", "TraceText": "Created"}]},
     }
 
+    # Minimal placeholder signature (zeep enforces Signature element minOccurs=1)
+    # This is NOT a cryptographically valid signature; DIV may still reject it,
+    # but it allows schema serialization so we can iterate on envelope shape.
+    digest_source = attachments[0].content if attachments else body_text.encode("utf-8")
+    digest_b64 = base64.b64encode(
+        getattr(attachments[0], "sha256_digest")() if attachments else digest_source
+    ).decode("ascii")
+    signature = {
+        "SignedInfo": {
+            "CanonicalizationMethod": {"Algorithm": "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"},
+            "SignatureMethod": {"Algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"},
+            "Reference": {
+                "URI": f"#{sender_doc_id}",
+                "DigestMethod": {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+                "DigestValue": digest_b64,
+            },
+        },
+        "SignatureValue": base64.b64encode(b"placeholder-signature").decode("ascii"),
+    }
+
     envelope = {
         "SenderDocument": {
             "Id": sender_doc_id,
             "DocumentMetadata": document_metadata,
             "SenderTransportMetadata": sender_transport,
         },
-        "ServerTransportMetadata": {"Id": "ServerSection"},
-        "RecipientConfirmations": {},
-        "Signatures": {},
+        # ServerTransportMetadata and RecipientConfirmations are populated by DIV (optional).
+        "Signatures": {"Signature": signature},
     }
     attachments_input = {"AttachmentInput": attachments_input_items} if attachments_input_items else None
     return envelope, attachments_input, message_id

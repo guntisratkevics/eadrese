@@ -10,6 +10,9 @@ class EAddressConfig:
     client_secret: str
     certificate: Optional[Path] = None
     private_key: Optional[Path] = None
+    wsse_signing: bool = False
+    wsse_verify: bool = False
+    wsse_timestamp: bool = True
     wsdl_url: str = "https://div.vraa.gov.lv/UnifiedService.svc?wsdl"
     token_url: str = "https://div.vraa.gov.lv/Auth/token"
     verify_ssl: bool = True
