@@ -28,6 +28,10 @@ class Attachment:
         import hashlib
         return hashlib.sha256(self.content).digest()
 
+    def sha512_digest(self) -> bytes:
+        import hashlib
+        return hashlib.sha512(self.content).digest()
+
 def _guess_mime(ext: str) -> str:
     mime_map = {
         ".xml": "application/xml",

@@ -16,6 +16,7 @@ def send_message(
     token_provider: TokenProvider,
     soap_client: SoapClient,
     recipient_personal_code: str,
+    sender_address: str | None = None,
     document_kind_code: str = "EINVOICE",
     subject: str = "Electronic invoice",
     body_text: str = "Please see the attached e-invoice.",
@@ -39,6 +40,7 @@ def send_message(
             recipients.append(vid_addr)
 
     envelope, attachments_input, built_message_id = build_envelope(
+        sender_address or cfg.default_from,
         recipients,
         document_kind_code,
         subject,

@@ -1,15 +1,130 @@
 import logging
+import base64
 import datetime as _dt
 import uuid
+import hashlib
+import ssl
+from pathlib import Path
 import requests
-from zeep import Client, Settings, ns
+from zeep import Client, Plugin, Settings, ns
 from zeep.plugins import HistoryPlugin
 from zeep.transports import Transport
 from zeep.wsse.signature import Signature
-from zeep.wsse.utils import get_security_header
+from zeep.wsse.utils import ensure_id, get_security_header
+from zeep.utils import detect_soap_env
 from lxml import etree
 from lxml.etree import QName
 import xmlsec
+
+DIV_NS = "http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0"
+
+class SenderDocumentSigner(Plugin):
+    """Zeep plugin that signs the SenderDocument section (envelope content)."""
+
+    def __init__(self, key_file: str, cert_file: str):
+        self.key_file = key_file
+        self.cert_file = cert_file
+        cert_text = Path(cert_file).read_text()
+        # Use first certificate in the bundle
+        if "-----BEGIN CERTIFICATE-----" in cert_text:
+            first_block = cert_text.split("-----BEGIN CERTIFICATE-----", 1)[1]
+            first_pem = "-----BEGIN CERTIFICATE-----" + first_block.split(
+                "-----END CERTIFICATE-----", 1
+            )[0] + "-----END CERTIFICATE-----"
+        else:
+            first_pem = cert_text
+        cert_der = ssl.PEM_cert_to_DER_cert(first_pem)
+        self.cert_sha1_b64 = base64.b64encode(hashlib.sha1(cert_der).digest()).decode("ascii")
+        decoded = ssl._ssl._test_decode_cert(cert_file)
+        issuer_parts = []
+        key_map = {
+            "commonName": "CN",
+            "domainComponent": "DC",
+            "organizationName": "O",
+            "organizationalUnitName": "OU",
+            "countryName": "C",
+        }
+        for rdn in reversed(decoded.get("issuer", [])):
+            for key, value in rdn:
+                prefix = key_map.get(key, key)
+                issuer_parts.append(f"{prefix}={value}")
+        self.issuer_name = ", ".join(issuer_parts)
+        serial_raw = decoded.get("serialNumber")
+        try:
+            self.serial_number = str(int(str(serial_raw), 16))
+        except Exception:
+            self.serial_number = str(serial_raw)
+
+    def egress(self, envelope, http_headers, operation, binding_options):
+        soap_env = detect_soap_env(envelope)
+        if not soap_env:
+            return envelope, http_headers
+        body = envelope.find(QName(soap_env, "Body"))
+        if body is None:
+            return envelope, http_headers
+        sender_doc = body.find(f".//{{{DIV_NS}}}SenderDocument")
+        signatures = body.find(f".//{{{DIV_NS}}}Signatures")
+        if sender_doc is None or signatures is None:
+            return envelope, http_headers
+        # Clear any placeholder signatures
+        for child in list(signatures):
+            signatures.remove(child)
+
+        signature_id = "SenderSignature"
+        signature = xmlsec.template.create(
+            envelope,
+            xmlsec.Transform.C14N,
+            xmlsec.Transform.RSA_SHA512,
+        )
+        ref = xmlsec.template.add_reference(
+            signature, xmlsec.Transform.SHA512, uri=f"#{sender_doc.get('Id')}"
+        )
+        xmlsec.template.add_transform(ref, xmlsec.Transform.C14N)
+        signed_props_id = "SignedProperties"
+        ref_props = xmlsec.template.add_reference(
+            signature, xmlsec.Transform.SHA512, uri=f"#{signed_props_id}"
+        )
+        ref_props.set("Type", "http://uri.etsi.org/01903#SignedProperties")
+
+        key_info = xmlsec.template.ensure_key_info(signature)
+        xmlsec.template.add_key_value(key_info)
+        x509_data = xmlsec.template.add_x509_data(key_info)
+        xmlsec.template.x509_data_add_certificate(x509_data)
+        signature.set("Id", signature_id)
+
+        xades_ns = "http://uri.etsi.org/01903/v1.3.2#"
+        qp = etree.Element(QName(xades_ns, "QualifyingProperties"), nsmap={"xades": xades_ns})
+        qp.set("Target", f"#{signature_id}")
+        qp.set("Id", "QualifyingProperties")
+        signed_props = etree.SubElement(qp, QName(xades_ns, "SignedProperties"))
+        signed_props.set("Id", signed_props_id)
+        ssp = etree.SubElement(signed_props, QName(xades_ns, "SignedSignatureProperties"))
+        signing_time = etree.SubElement(ssp, QName(xades_ns, "SigningTime"))
+        signing_time.text = _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        sc = etree.SubElement(ssp, QName(xades_ns, "SigningCertificate"))
+        cert_el = etree.SubElement(sc, QName(xades_ns, "Cert"))
+        cert_digest = etree.SubElement(cert_el, QName(xades_ns, "CertDigest"))
+        etree.SubElement(
+            cert_digest,
+            QName(ns.DS, "DigestMethod"),
+            Algorithm="http://www.w3.org/2000/09/xmldsig#sha1",
+        )
+        etree.SubElement(cert_digest, QName(ns.DS, "DigestValue")).text = self.cert_sha1_b64
+        issuer_serial = etree.SubElement(cert_el, QName(xades_ns, "IssuerSerial"))
+        etree.SubElement(issuer_serial, QName(ns.DS, "X509IssuerName")).text = self.issuer_name
+        etree.SubElement(issuer_serial, QName(ns.DS, "X509SerialNumber")).text = self.serial_number
+        obj = etree.SubElement(signature, QName(ns.DS, "Object"))
+        obj.append(qp)
+        signatures.append(signature)
+
+        ctx = xmlsec.SignatureContext()
+        key = xmlsec.Key.from_file(self.key_file, xmlsec.KeyFormat.PEM)
+        key.load_cert_from_file(self.cert_file, xmlsec.KeyFormat.PEM)
+        ctx.key = key
+        ctx.register_id(sender_doc, "Id")
+        ctx.register_id(signed_props, "Id")
+        ctx.sign(signature)
+        return envelope, http_headers
 
 
 class SignOnlySignature(Signature):
@@ -25,14 +140,22 @@ class SignOnlySignature(Signature):
         signature_method=None,
         digest_method=None,
     ):
-        signature_method = signature_method or xmlsec.Transform.RSA_SHA256
-        digest_method = digest_method or xmlsec.Transform.SHA256
+        signature_method = signature_method or xmlsec.Transform.RSA_SHA1
+        digest_method = digest_method or xmlsec.Transform.SHA1
         super().__init__(
             key_file,
             certfile,
             signature_method=signature_method,
             digest_method=digest_method,
         )
+        self.key_file = key_file
+        self.certfile = certfile
+        self._signature_method = signature_method
+        self._digest_method = digest_method
+        with open(certfile, "rb") as fh:
+            self._cert_b64 = (
+                base64.b64encode(fh.read()).decode("ascii").replace("\n", "")
+            )
         self._add_timestamp = add_timestamp
         self._verify_response = verify_response
 
@@ -42,24 +165,86 @@ class SignOnlySignature(Signature):
         return envelope
 
     def apply(self, envelope, headers):
+        security = get_security_header(envelope)
+        soap_env = detect_soap_env(envelope)
+        if soap_env:
+            security.set(QName(soap_env, "mustUnderstand"), "true")
+        for existing in list(security.findall(QName(ns.DS, "Signature"))):
+            security.remove(existing)
+
+        timestamp_el = None
         if self._add_timestamp:
-            security = get_security_header(envelope)
-            ts = QName(ns.WSU, "Timestamp")
-            id_attr = {QName(ns.WSU, "Id"): f"TS-{uuid.uuid4()}"}
-            ts_el = security.find(ts)
-            if ts_el is None:
-                ts_el = etree.SubElement(security, ts, id_attr)
+            timestamp_el = security.find(QName(ns.WSU, "Timestamp"))
+            if timestamp_el is None:
+                timestamp_el = etree.SubElement(security, QName(ns.WSU, "Timestamp"))
             else:
-                ts_el.clear()
-                ts_el.attrib.update(id_attr)
+                for child in list(timestamp_el):
+                    timestamp_el.remove(child)
+            ensure_id(timestamp_el)
             now = _dt.datetime.utcnow()
             created = (now).isoformat(timespec="seconds") + "Z"
             expires = (now + _dt.timedelta(minutes=5)).isoformat(timespec="seconds") + "Z"
-            created_el = etree.SubElement(ts_el, QName(ns.WSU, "Created"))
+            created_el = etree.SubElement(timestamp_el, QName(ns.WSU, "Created"))
             created_el.text = created
-            expires_el = etree.SubElement(ts_el, QName(ns.WSU, "Expires"))
+            expires_el = etree.SubElement(timestamp_el, QName(ns.WSU, "Expires"))
             expires_el.text = expires
-        return super().apply(envelope, headers)
+
+        to_el = envelope.find(f".//{{{ns.WSA}}}To")
+        if to_el is not None:
+            ensure_id(to_el)
+
+        bst_id = f"BST-{uuid.uuid4()}"
+        bst = etree.Element(
+            QName(ns.WSSE, "BinarySecurityToken"),
+            {
+                QName(ns.WSU, "Id"): bst_id,
+                "ValueType": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3",
+                "EncodingType": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary",
+            },
+        )
+        bst.text = self._cert_b64
+        insert_at = 0
+        if timestamp_el is not None:
+            insert_at = list(security).index(timestamp_el) + 1
+        security.insert(insert_at, bst)
+
+        signature = xmlsec.template.create(
+            envelope,
+            xmlsec.Transform.EXCL_C14N,
+            self._signature_method,
+        )
+        key_info = xmlsec.template.ensure_key_info(signature)
+        str_el = etree.SubElement(key_info, QName(ns.WSSE, "SecurityTokenReference"))
+        etree.SubElement(
+            str_el,
+            QName(ns.WSSE, "Reference"),
+            {
+                "URI": f"#{bst_id}",
+                "ValueType": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3",
+            },
+        )
+        security.append(signature)
+
+        ctx = xmlsec.SignatureContext()
+        key = xmlsec.Key.from_file(self.key_file, xmlsec.KeyFormat.PEM)
+        key.load_cert_from_file(self.certfile, xmlsec.KeyFormat.PEM)
+        ctx.key = key
+
+        def _add_reference(target):
+            node_id = ensure_id(target)
+            ctx.register_id(target, "Id", ns.WSU)
+            ref = xmlsec.template.add_reference(
+                signature, self._digest_method, uri="#" + node_id
+            )
+            xmlsec.template.add_transform(ref, xmlsec.Transform.EXCL_C14N)
+
+        if timestamp_el is not None:
+            _add_reference(timestamp_el)
+        if to_el is not None:
+            _add_reference(to_el)
+
+        ctx.sign(signature)
+        return envelope, headers
 from ..config import EAddressConfig
 
 logger = logging.getLogger(__name__)
@@ -68,6 +253,11 @@ class SoapClient:
     def __init__(self, cfg: EAddressConfig, session: requests.Session, service=None):
         self.cfg = cfg
         self._history = HistoryPlugin() if service is None else None
+        self._signer = (
+            SenderDocumentSigner(str(cfg.private_key), str(cfg.certificate))
+            if cfg.wsse_signing and cfg.certificate and cfg.private_key
+            else None
+        )
         
         if service is not None:
             self._client = None
@@ -85,10 +275,16 @@ class SoapClient:
                 )
 
             settings = Settings(strict=False, xml_huge_tree=True)
+            plugins = []
+            if self._history:
+                plugins.append(self._history)
+            if self._signer:
+                plugins.append(self._signer)
+
             self._client = Client(
                 cfg.wsdl_url,
                 transport=transport,
-                plugins=[self._history] if self._history else None,
+                plugins=plugins or None,
                 wsse=wsse,
                 settings=settings,
             )

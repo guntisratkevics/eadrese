@@ -6,6 +6,7 @@ from ..attachments import Attachment
 from ..utils import tz_riga
 
 def build_envelope(
+    sender_e_address: str,
     recipients_list: List[str],
     document_kind_code: str,
     subject: str,
@@ -14,14 +15,14 @@ def build_envelope(
 ) -> tuple[Mapping[str, object], Sequence[Mapping[str, object]], str]:
     """Builds a minimal DIV EnvelopeStructure equivalent to the Java sidecar."""
     now = _dt.datetime.now(tz=tz_riga())
-    message_id = str(uuid.uuid4())
+    message_id = uuid.uuid4().hex
     sender_doc_id = "SenderSection"
 
     attachments_input_items = []
     files = []
     for idx, att in enumerate(attachments, start=1):
-        content_id = f"cid:{idx}"
-        digest = att.sha256_digest() if hasattr(att, "sha256_digest") else b""
+        content_id = str(idx - 1)
+        digest = att.sha512_digest() if hasattr(att, "sha512_digest") else b""
         digest_b64 = base64.b64encode(digest).decode("ascii")
         attachments_input_items.append(
             {
@@ -36,7 +37,7 @@ def build_envelope(
                 "Name": att.filename,
                 "Content": {
                     "ContentReference": content_id,
-                    "DigestMethod": {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+                    "DigestMethod": {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha512"},
                     "DigestValue": digest_b64,
                 },
                 "Compressed": False,
@@ -66,7 +67,7 @@ def build_envelope(
         })
 
     sender_transport = {
-        "SenderE-Address": recipients_list[0] if recipients_list else "_DEFAULT@00000000000",
+        "SenderE-Address": sender_e_address or (recipients_list[0] if recipients_list else "_DEFAULT@00000000000"),
         "SenderRefNumber": message_id,
         "Recipients": {"RecipientEntry": recipient_entries},
         "NotifySenderOnDelivery": False,
