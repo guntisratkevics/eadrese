@@ -138,6 +138,7 @@ class SignOnlySignature(Signature):
         add_timestamp: bool = False,
         verify_response: bool = False,
         trust_store_path: str | None = None,
+        response_cert_path: str | None = None,
         signature_method=None,
         digest_method=None,
     ):
@@ -154,6 +155,7 @@ class SignOnlySignature(Signature):
         self._signature_method = signature_method
         self._digest_method = digest_method
         self._trust_store_path = trust_store_path
+        self._response_cert_path = response_cert_path
         with open(certfile, "rb") as fh:
             cert_bytes = fh.read()
             self._cert_b64 = base64.b64encode(cert_bytes).decode("ascii").replace("\n", "")
@@ -181,16 +183,21 @@ class SignOnlySignature(Signature):
         self._verify_response = verify_response
 
     def verify(self, envelope):
-        if not self._verify_response or not self._trust_store_path:
+        if not self._verify_response:
             return envelope
         # Verify the first Signature found in the envelope using the trust store
         sign_node = envelope.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
         if sign_node is None:
             return envelope
-        manager = xmlsec.KeysManager()
-        manager.load_cert(self._trust_store_path, xmlsec.KeyDataFormatPem, xmlsec.KeyDataTypeTrusted)
-        ctx = xmlsec.SignatureContext(manager)
-        ctx.verify(sign_node)
+        if self._response_cert_path:
+            ctx = xmlsec.SignatureContext()
+            ctx.key = xmlsec.Key.from_file(self._response_cert_path, xmlsec.KeyDataFormatCertPem)
+            ctx.verify(sign_node)
+        elif self._trust_store_path:
+            manager = xmlsec.KeysManager()
+            manager.load_cert(self._trust_store_path, xmlsec.KeyDataFormatPem, xmlsec.KeyDataTypeTrusted)
+            ctx = xmlsec.SignatureContext(manager)
+            ctx.verify(sign_node)
 
         # Optional OCSP validation (best-effort)
         if getattr(self, "_verify_response_ocsp", False):
@@ -362,6 +369,7 @@ class SoapClient:
                     add_timestamp=cfg.wsse_timestamp,
                     verify_response=cfg.wsse_verify,
                     trust_store_path=str(cfg.trust_store_path) if cfg.trust_store_path else None,
+                    response_cert_path=str(cfg.response_cert_path) if cfg.response_cert_path else None,
                 )
 
             settings = Settings(strict=False, xml_huge_tree=True)

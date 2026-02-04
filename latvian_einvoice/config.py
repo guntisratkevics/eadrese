@@ -47,3 +47,4 @@ class EAddressConfig:
     verify_response_signature: bool = True
     trust_store_path: Optional[Path] = None  # PEM bundle of trusted issuers (server cert chain)
     verify_response_ocsp: bool = False  # requires network to OCSP responders
+    response_cert_path: Optional[Path] = None  # optional explicit server cert for signature verify
