@@ -1,6 +1,7 @@
 import logging
 import base64
 import datetime as _dt
+from datetime import timezone
 import uuid
 import hashlib
 import ssl
@@ -198,11 +199,16 @@ class SignOnlySignature(Signature):
             return envelope
         if self._response_cert_path:
             ctx = xmlsec.SignatureContext()
-            ctx.key = xmlsec.Key.from_file(self._response_cert_path, xmlsec.KeyDataFormatCertPem)
+            fmt_cert = getattr(xmlsec.constants, "KeyDataFormatCertPem", xmlsec.constants.KeyDataFormatPem)
+            ctx.key = xmlsec.Key.from_file(self._response_cert_path, fmt_cert)
             ctx.verify(sign_node)
         elif self._trust_store_path:
             manager = xmlsec.KeysManager()
-            manager.load_cert(self._trust_store_path, xmlsec.KeyDataFormatPem, xmlsec.KeyDataTypeTrusted)
+            manager.load_cert(
+                self._trust_store_path,
+                xmlsec.constants.KeyDataFormatPem,
+                xmlsec.constants.KeyDataTypeTrusted,
+            )
             ctx = xmlsec.SignatureContext(manager)
             ctx.verify(sign_node)
 
@@ -237,9 +243,9 @@ class SignOnlySignature(Signature):
                 for child in list(timestamp_el):
                     timestamp_el.remove(child)
             ensure_id(timestamp_el)
-            now = _dt.datetime.utcnow()
-            created = (now).isoformat(timespec="seconds") + "Z"
-            expires = (now + _dt.timedelta(minutes=5)).isoformat(timespec="seconds") + "Z"
+            now = _dt.datetime.now(timezone.utc)
+            created = (now).isoformat(timespec="seconds").replace("+00:00", "Z")
+            expires = (now + _dt.timedelta(minutes=5)).isoformat(timespec="seconds").replace("+00:00", "Z")
             created_el = etree.SubElement(timestamp_el, QName(ns.WSU, "Created"))
             created_el.text = created
             expires_el = etree.SubElement(timestamp_el, QName(ns.WSU, "Expires"))
@@ -301,7 +307,7 @@ class SignOnlySignature(Signature):
         ensure_id(signed_props)
         ssp = etree.SubElement(signed_props, QName(xades_ns, "SignedSignatureProperties"))
         signing_time = etree.SubElement(ssp, QName(xades_ns, "SigningTime"))
-        signing_time.text = _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        signing_time.text = _dt.datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         sc = etree.SubElement(ssp, QName(xades_ns, "SigningCertificate"))
         cert_el = etree.SubElement(sc, QName(xades_ns, "Cert"))
         cert_digest = etree.SubElement(cert_el, QName(xades_ns, "CertDigest"))
