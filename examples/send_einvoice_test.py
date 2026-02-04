@@ -1,5 +1,8 @@
 import os
 import logging
+import pytest
+pytest.importorskip("xmlsec")
+
 from latvian_einvoice import EAddressClient, EAddressConfig, Attachment
 
 logging.basicConfig(level=logging.INFO)

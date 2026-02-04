@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("xmlsec")
+
 from latvian_einvoice import (
     Attachment,
     EAddressClient,

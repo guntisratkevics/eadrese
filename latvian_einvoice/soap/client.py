@@ -14,7 +14,10 @@ from zeep.wsse.utils import ensure_id, get_security_header
 from zeep.utils import detect_soap_env
 from lxml import etree
 from lxml.etree import QName
-import xmlsec
+try:
+    import xmlsec
+except ImportError:  # pragma: no cover - optional dependency
+    xmlsec = None
 
 DIV_NS = "http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0"
 
@@ -22,6 +25,8 @@ class SenderDocumentSigner(Plugin):
     """Zeep plugin that signs the SenderDocument section (envelope content)."""
 
     def __init__(self, key_file: str, cert_file: str):
+        if xmlsec is None:
+            raise ImportError("xmlsec is required for signing (install python-xmlsec)")
         self.key_file = key_file
         self.cert_file = cert_file
         cert_text = Path(cert_file).read_text()
@@ -142,6 +147,8 @@ class SignOnlySignature(Signature):
         signature_method=None,
         digest_method=None,
     ):
+        if xmlsec is None:
+            raise ImportError("xmlsec is required for WS-Security signatures (install python-xmlsec)")
         signature_method = signature_method or xmlsec.Transform.RSA_SHA1
         digest_method = digest_method or xmlsec.Transform.SHA1
         super().__init__(
