@@ -41,10 +41,11 @@ class EAddressClient:
             self.token_provider,
             self.soap_client,
             recipient_personal_code,
-            document_kind_code,
-            subject,
-            body_text,
-            attachments
+            sender_address=None,
+            document_kind_code=document_kind_code,
+            subject=subject,
+            body_text=body_text,
+            attachments=attachments,
         )
 
     def get_next_message(self, include_attachments: bool = True) -> Optional[Mapping[str, Any]]:
@@ -55,7 +56,8 @@ class EAddressClient:
         return receive.get_next_message(
             self.token_provider,
             self.soap_client,
-            include_attachments
+            include_attachments,
+            auto_confirm=False,
         )
 
     def confirm_message(self, message_id: str) -> None:

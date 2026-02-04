@@ -107,7 +107,7 @@ def build_envelope(
     }
 
     # Minimal ds:Signature (structure valid for XSD; not cryptographically verified here).
-    digest_source = attachments[0].content if attachments else body_text.encode("utf-8")
+    digest_source = attachments[0].content if attachments else (body_text or "").encode("utf-8")
     digest_b64 = base64.b64encode(
         getattr(attachments[0], "sha512_digest")() if attachments else digest_source
     ).decode("ascii")
