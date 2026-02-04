@@ -58,7 +58,7 @@ def get_next_message(
                         att["DecryptedContent"] = decrypted
                     except Exception:
                         # leave undecrypted if fails
-                        pass
+                        att["DecryptError"] = True
         except Exception:
             pass
 
@@ -69,6 +69,7 @@ def get_next_message(
             try:
                 confirm_message(token_provider, soap_client, msg_id)
                 data["Confirmed"] = True
-            except Exception:
+            except Exception as exc:
                 data["Confirmed"] = False
+                data["ConfirmError"] = str(exc)
     return data

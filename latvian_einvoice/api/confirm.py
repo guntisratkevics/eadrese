@@ -6,8 +6,8 @@ def confirm_message(
     token_provider: TokenProvider,
     soap_client: SoapClient,
     message_id: str
-) -> None:
-    """Confirm receipt of a message."""
+) -> bool:
+    """Confirm receipt of a message. Returns True on success."""
     token = token_provider.get_token()
     svc = soap_client.service
     
@@ -18,3 +18,4 @@ def confirm_message(
             raise EAddressSoapError("Service has no ConfirmMessage method")
     except Exception as exc:
          raise EAddressSoapError(f"VUS ConfirmMessage call failed for {message_id}") from exc
+    return True
