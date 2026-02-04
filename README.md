@@ -1,12 +1,12 @@
-# Latvian E-Invoice & E-Address SDK
+# Latvian E-Invoice & E-Address SDK (experimental)
 
-A pure Python client for Latvia's E-Address (VRAA VUS) and VID EDS e-invoice integration.
-Designed to work without official Java/.NET libraries.
+A **work-in-progress** Python client for Latvia's E-Address (VRAA VUS) and VID EDS e-invoice integration.
+Designed to work without official Java/.NET libraries, but **parts of the protocol are still being reverse‑engineered** and not fully tested end-to-end.
 
 ## Features
 *   **OAuth2 Authentication**: Automatic token fetching and caching.
-*   **SOAP Client**: Full integration with VUS `UnifiedService`.
-*   **E-Invoices**: Specialized support for `EINVOICE` document type.
+*   **SOAP Client**: Integration with VUS `UnifiedService` (experimental; may change).
+*   **E-Invoices**: Support for `EINVOICE` document type (envelope shape follows DIV XSD; validation ongoing).
 *   **VID Integration**: Automatic routing to VID sub-addresses in PROD/TEST.
 *   **Zero Java/.NET**: Pure Python implementation using `zeep` and `requests`.
 
@@ -15,6 +15,11 @@ Designed to work without official Java/.NET libraries.
 pip install .
 ```
 (Or `pip install -e .` for development)
+
+**Status / Caveats**
+*   Experimental: not production-ready; cryptographic parts (WS-Security, XAdES, OCSP, encryption) are under active development.
+*   Partially reverse-engineered (“wiresharked”) from official Java/.NET flows and XSD/WSDL; behavior may differ from the official clients.
+*   Response signature/OCSP validation is best-effort only; verify with your own trust store and additional checks.
 
 ## Documentation
 *   [Client Specification](docs/python-client-spec.md)
