@@ -17,6 +17,11 @@ class Attachment:
         ctype = content_type or _guess_mime(path.suffix)
         return cls(filename=path.name, content=data, content_type=ctype)
 
+    @classmethod
+    def from_xml(cls, path: Path) -> "Attachment":
+        """Convenience for XML payloads (e.g., UBL/PEPPOL)."""
+        return cls.from_file(path, content_type="application/xml")
+
     def to_payload(self) -> Mapping[str, str]:
         return {
             "FileName": self.filename,
