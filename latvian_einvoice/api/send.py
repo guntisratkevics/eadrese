@@ -23,7 +23,7 @@ def send_message(
     attachments: Iterable[Attachment] = (),
 ) -> str:
     """Send a single e-adrese message and return the VUS messageId."""
-    token = token_provider.get_token()
+    token = token_provider.get_token() if token_provider else None
     
     recipients = [recipient_personal_code]
     
@@ -54,10 +54,13 @@ def send_message(
     try:
         if hasattr(svc, "SendMessage"):
             try:
-                response = svc.SendMessage(Token=token, Envelope=envelope, AttachmentsInput=attachments_input or None)
+                if token:
+                    response = svc.SendMessage(Token=token, Envelope=envelope, AttachmentsInput=attachments_input or None)
+                else:
+                    response = svc.SendMessage(Envelope=envelope, AttachmentsInput=attachments_input or None)
             except TypeError:
                 # Fallback for simple stubs expecting positional args
-                response = svc.SendMessage(token, envelope)
+                response = svc.SendMessage(token, envelope) if token else svc.SendMessage(envelope)
         elif callable(svc):
              response = svc(None, envelope)
         else:

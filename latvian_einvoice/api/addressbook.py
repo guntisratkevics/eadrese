@@ -10,12 +10,15 @@ def search_addressee(
     registration_number: str
 ) -> List[Mapping[str, Any]]:
     """Search for an addressee by registration number."""
-    token = token_provider.get_token()
+    token = token_provider.get_token() if token_provider else None
     svc = soap_client.service
     
     try:
         if hasattr(svc, "SearchAddresseeUnit"):
-            response = svc.SearchAddresseeUnit(Token=token, RegistrationNumber=registration_number)
+            if token:
+                response = svc.SearchAddresseeUnit(Token=token, RegistrationNumber=registration_number)
+            else:
+                response = svc.SearchAddresseeUnit(RegistrationNumber=registration_number)
         else:
             raise EAddressSoapError("Service has no SearchAddresseeUnit method")
     except Exception as exc:

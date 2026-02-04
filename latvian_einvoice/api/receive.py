@@ -16,12 +16,15 @@ def get_next_message(
     auto_confirm: bool = True,
 ) -> Optional[Mapping[str, Any]]:
     """Check for the next available message."""
-    token = token_provider.get_token()
+    token = token_provider.get_token() if token_provider else None
     svc = soap_client.service
     
     try:
         if hasattr(svc, "GetNextMessage"):
-            response = svc.GetNextMessage(Token=token, IncludeAttachments=include_attachments)
+            if token:
+                response = svc.GetNextMessage(Token=token, IncludeAttachments=include_attachments)
+            else:
+                response = svc.GetNextMessage(IncludeAttachments=include_attachments)
         else:
             # Stub support logic if needed, or raise
             raise EAddressSoapError("Service has no GetNextMessage method")

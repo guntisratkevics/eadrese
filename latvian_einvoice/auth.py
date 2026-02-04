@@ -19,11 +19,14 @@ class TokenProvider:
         if self._token and self._token_expiry and now < self._token_expiry - _dt.timedelta(seconds=60):
             return self._token
 
-        # Allow bypassing OAuth for test endpoints when token_url is blank/dummy.
-        if not self.cfg.token_url or self.cfg.token_url.lower().startswith(("dummy", "skip")):
-            self._token = "dummy-token"
-            self._token_expiry = now + _dt.timedelta(hours=1)
-            return self._token
+        # Allow bypassing OAuth when VRAA has not issued client credentials (Java mTLS-only flow).
+        if (
+            not self.cfg.token_url
+            or self.cfg.token_url.lower().startswith(("dummy", "skip"))
+            or not self.cfg.client_id
+            or not self.cfg.client_secret
+        ):
+            return None
         
         try:
             resp = self._session.post(
