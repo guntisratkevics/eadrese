@@ -191,6 +191,18 @@ class SignOnlySignature(Signature):
         manager.load_cert(self._trust_store_path, xmlsec.KeyDataFormatPem, xmlsec.KeyDataTypeTrusted)
         ctx = xmlsec.SignatureContext(manager)
         ctx.verify(sign_node)
+
+        # Optional OCSP validation (best-effort)
+        if getattr(self, "_verify_response_ocsp", False):
+            try:
+                from cryptography import x509
+                leaf_pem = Path(self._trust_store_path).read_bytes()
+                leaf = x509.load_pem_x509_certificate(leaf_pem)
+                # simplistic: single cert trust store, attempt OCSP
+                if not validate_chain_with_ocsp(leaf_pem, [leaf_pem]):
+                    raise xmlsec.Error("OCSP validation failed")
+            except Exception as exc:
+                raise
         return envelope
 
     def apply(self, envelope, headers):
