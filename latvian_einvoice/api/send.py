@@ -53,7 +53,11 @@ def send_message(
     # Handle both real service and callables (stubs)
     try:
         if hasattr(svc, "SendMessage"):
-            response = svc.SendMessage(Envelope=envelope, AttachmentsInput=attachments_input or None)
+            try:
+                response = svc.SendMessage(Token=token, Envelope=envelope, AttachmentsInput=attachments_input or None)
+            except TypeError:
+                # Fallback for simple stubs expecting positional args
+                response = svc.SendMessage(token, envelope)
         elif callable(svc):
              response = svc(None, envelope)
         else:
