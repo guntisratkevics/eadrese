@@ -27,6 +27,13 @@ def build_envelope(
     attachments_input_items = []
     files = []
     for idx, att in enumerate(attachments, start=1):
+        payload_bytes = att.content
+        iv = cipher_with_tag = None
+        # Encrypt payload if we have a symmetric key
+        if symmetric_key_bytes:
+            iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, att.content)
+            payload_bytes = cipher_with_tag
+
         content_id = str(idx - 1)
         digest = att.sha512_digest() if hasattr(att, "sha512_digest") else b""
         digest_b64 = base64.b64encode(digest).decode("ascii")
@@ -46,12 +53,6 @@ def build_envelope(
                 ),
             }
         )
-        payload_bytes = att.content
-        iv = cipher_with_tag = None
-        # Encrypt payload if we have a symmetric key
-        if symmetric_key_bytes:
-            iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, att.content)
-            payload_bytes = cipher_with_tag
         digest_b64_payload = base64.b64encode(
             getattr(att, "sha512_digest")() if not symmetric_key_bytes else __import__("hashlib").sha512(payload_bytes).digest()
         ).decode("ascii")
