@@ -80,9 +80,8 @@ def test_eadrese_send_message_uses_stub_service():
     assert msg_id == "stubbed-id"
     assert svc.calls[0]["token"] == "token123"
     envelope = svc.calls[0]["envelope"]
-    assert envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["Recipient"][0]["ReceiverE-address"] == "0101"
-    assert envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["Recipient"][0]["Correspondent"]["CorrespondentCode"] == "0101"
-    payload_files = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["DocumentPayload"]["File"]
+    assert envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"][0]["RecipientE-Address"] == "0101"
+    payload_files = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"]
     assert payload_files[0]["Name"] == "sample.xml"
 
 
@@ -130,13 +129,13 @@ def test_eadrese_vid_auto_logic():
     
     envelope = svc.calls[0]["envelope"]
     # Check recipients structure
-    e_addresses = envelope["SenderDocument"]["SenderTransportMetadata"]["Sender"]["E-Addresses"]["E-Address"]
-    recipient_structs = envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["Recipient"]
+    recipient_structs = envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"]
     
     # We expect 2 recipients: Client + VID
-    assert len(e_addresses) == 2
-    assert "010101-11111" in e_addresses
-    assert "VID_EREKINI_PROD@90000069281" in e_addresses # Default PROD address since token url is standard
+    assert len(recipient_structs) == 2
+    addrs = {r["RecipientE-Address"] for r in recipient_structs}
+    assert "010101-11111" in addrs
+    assert "VID_EREKINI_PROD@90000069281" in addrs # Default PROD address since token url is standard
 
     
 def test_eadrese_auth_error():

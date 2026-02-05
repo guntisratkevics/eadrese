@@ -90,7 +90,7 @@ def test_build_envelope_with_encryption_populates_ciphertext():
     ai = attachments_input["AttachmentInput"][0]
     assert "IV" in ai and "CipherText" in ai
     # DigestValue in File should match sha512 of ciphertext
-    file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["DocumentPayload"]["File"][0]
+    file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"][0]
     digest_b64 = file_entry["Content"]["DigestValue"]
     ct = base64.b64decode(ai["CipherText"])
     assert digest_b64 == base64.b64encode(hashlib.sha512(ct).digest()).decode("ascii")

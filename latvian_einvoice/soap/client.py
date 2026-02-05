@@ -134,7 +134,7 @@ class SenderDocumentSigner(Plugin):
 
 
 class SignOnlySignature(Signature):
-    """WSSE signature that optionally adds Timestamp and skips response verification."""
+    """WSSE signature (asymmetric) with optional Timestamp and optional response verification."""
 
     def __init__(
         self,
@@ -150,8 +150,9 @@ class SignOnlySignature(Signature):
     ):
         if xmlsec is None:
             raise ImportError("xmlsec is required for WS-Security signatures (install python-xmlsec)")
-        signature_method = signature_method or xmlsec.Transform.RSA_SHA1
-        digest_method = digest_method or xmlsec.Transform.SHA1
+        # DIV policy Basic256 → RSA-SHA256/SHA256
+        signature_method = signature_method or xmlsec.Transform.RSA_SHA256
+        digest_method = digest_method or xmlsec.Transform.SHA256
         super().__init__(
             key_file,
             certfile,
@@ -251,21 +252,27 @@ class SignOnlySignature(Signature):
             expires_el = etree.SubElement(timestamp_el, QName(ns.WSU, "Expires"))
             expires_el.text = expires
 
-        to_el = envelope.find(f".//{{{ns.WSA}}}To")
-        if to_el is not None:
-            ensure_id(to_el)
-        else:
-            # Inject minimal WS-Addressing headers if missing
-            header = envelope.find(QName(soap_env, "Header")) if soap_env else None
-            if header is None:
-                header = etree.SubElement(envelope, QName(soap_env, "Header"))
+        header = envelope.find(QName(soap_env, "Header")) if soap_env else None
+        if header is None:
+            header = etree.SubElement(envelope, QName(soap_env, "Header"))
+
+        to_el = header.find(f".//{{{ns.WSA}}}To")
+        if to_el is None:
             to_el = etree.SubElement(header, QName(ns.WSA, "To"))
-            to_el.text = "http://vraa.gov.lv/div/uui/2011/11/UnifiedService"
-            ensure_id(to_el)
+        to_el.text = "https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc"
+        ensure_id(to_el)
+
+        msg_id_el = header.find(f".//{{{ns.WSA}}}MessageID")
+        if msg_id_el is None:
             msg_id_el = etree.SubElement(header, QName(ns.WSA, "MessageID"))
             msg_id_el.text = f"urn:uuid:{uuid.uuid4()}"
+        ensure_id(msg_id_el)
+
+        action_el = header.find(f".//{{{ns.WSA}}}Action")
+        if action_el is None:
             action_el = etree.SubElement(header, QName(ns.WSA, "Action"))
             action_el.text = "http://vraa.gov.lv/div/uui/2011/11/IUnifiedService/SendMessage"
+        ensure_id(action_el)
 
         bst_id = f"BST-{uuid.uuid4()}"
         bst = etree.Element(
@@ -288,36 +295,19 @@ class SignOnlySignature(Signature):
             self._signature_method,
         )
         key_info = xmlsec.template.ensure_key_info(signature)
+        # X509Data with IssuerSerial (Metro-compatible)
+        x509_data = xmlsec.template.add_x509_data(key_info)
+        xmlsec.template.x509_data_add_certificate(x509_data)
+        # STR thumbprint reference (policy: RequireThumbprintReference)
         str_el = etree.SubElement(key_info, QName(ns.WSSE, "SecurityTokenReference"))
         etree.SubElement(
             str_el,
-            QName(ns.WSSE, "Reference"),
+            QName(ns.WSSE, "KeyIdentifier"),
             {
-                "URI": f"#{bst_id}",
-                "ValueType": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3",
+                "ValueType": "http://docs.oasis-open.org/wss/oasis-wss-soap-message-security-1.1#ThumbprintSHA1",
             },
-        )
+        ).text = self._cert_sha1_b64
         security.append(signature)
-
-        # XAdES SignedProperties (minimal BES)
-        xades_ns = "http://uri.etsi.org/01903/v1.3.2#"
-        qp = etree.Element(QName(xades_ns, "QualifyingProperties"), nsmap={"xades": xades_ns})
-        qp.set("Target", f"#{ensure_id(signature)}")
-        signed_props = etree.SubElement(qp, QName(xades_ns, "SignedProperties"))
-        ensure_id(signed_props)
-        ssp = etree.SubElement(signed_props, QName(xades_ns, "SignedSignatureProperties"))
-        signing_time = etree.SubElement(ssp, QName(xades_ns, "SigningTime"))
-        signing_time.text = _dt.datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        sc = etree.SubElement(ssp, QName(xades_ns, "SigningCertificate"))
-        cert_el = etree.SubElement(sc, QName(xades_ns, "Cert"))
-        cert_digest = etree.SubElement(cert_el, QName(xades_ns, "CertDigest"))
-        etree.SubElement(cert_digest, QName(ns.DS, "DigestMethod"), Algorithm="http://www.w3.org/2000/09/xmldsig#sha1")
-        etree.SubElement(cert_digest, QName(ns.DS, "DigestValue")).text = self._cert_sha1_b64
-        issuer_serial = etree.SubElement(cert_el, QName(xades_ns, "IssuerSerial"))
-        etree.SubElement(issuer_serial, QName(ns.DS, "X509IssuerName")).text = getattr(self, "_issuer_name", "")
-        etree.SubElement(issuer_serial, QName(ns.DS, "X509SerialNumber")).text = getattr(self, "_serial_number", "")
-        obj = etree.SubElement(signature, QName(ns.DS, "Object"))
-        obj.append(qp)
 
         ctx = xmlsec.SignatureContext()
         key = xmlsec.Key.from_file(self.key_file, xmlsec.KeyFormat.PEM)
@@ -334,20 +324,9 @@ class SignOnlySignature(Signature):
 
         if timestamp_el is not None:
             _add_reference(timestamp_el)
+        # DIV policy SignedParts includes To; keep signature minimal (Timestamp + To)
         if to_el is not None:
             _add_reference(to_el)
-        if action_el is not None:
-            _add_reference(action_el)
-        if msg_id_el is not None:
-            _add_reference(msg_id_el)
-        if body is not None:
-            _add_reference(body)
-        # SignedProperties reference
-        ref_props = xmlsec.template.add_reference(
-            signature, self._digest_method, uri="#" + ensure_id(signed_props)
-        )
-        ref_props.set("Type", "http://uri.etsi.org/01903#SignedProperties")
-        xmlsec.template.add_transform(ref_props, xmlsec.Transform.EXCL_C14N)
 
         ctx.sign(signature)
         return envelope, headers

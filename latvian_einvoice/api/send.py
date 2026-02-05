@@ -16,6 +16,7 @@ def send_message(
     token_provider: TokenProvider,
     soap_client: SoapClient,
     recipient_personal_code: str,
+    connection_id: str | None = None,
     sender_address: str | None = None,
     document_kind_code: str = "EINVOICE",
     subject: str = "Electronic invoice",
@@ -54,13 +55,21 @@ def send_message(
     try:
         if hasattr(svc, "SendMessage"):
             try:
+                kwargs = {
+                    "Envelope": envelope,
+                    "AttachmentsInput": attachments_input or None,
+                }
                 if token:
-                    response = svc.SendMessage(Token=token, Envelope=envelope, AttachmentsInput=attachments_input or None)
-                else:
-                    response = svc.SendMessage(Envelope=envelope, AttachmentsInput=attachments_input or None)
+                    kwargs["Token"] = token
+                if connection_id:
+                    kwargs["_soapheaders"] = {"ConnectionId": connection_id}
+                response = svc.SendMessage(**kwargs)
             except TypeError:
                 # Fallback for simple stubs expecting positional args
-                response = svc.SendMessage(token, envelope) if token else svc.SendMessage(envelope)
+                if connection_id:
+                    response = svc.SendMessage(connection_id, token, envelope) if token else svc.SendMessage(connection_id, envelope)
+                else:
+                    response = svc.SendMessage(token, envelope) if token else svc.SendMessage(envelope)
         elif callable(svc):
              response = svc(None, envelope)
         else:

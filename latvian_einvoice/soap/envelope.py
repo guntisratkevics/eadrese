@@ -83,23 +83,15 @@ def build_envelope(
                 "DocumentKindName": document_kind_code,
             },
         },
-        # Align with DIV schema expectations used by stub/unit tests:
-        # PayloadReference -> DocumentPayload -> File list.
-        "PayloadReference": {"DocumentPayload": {"File": files}},
+        # DIV WSDL expects PayloadReference -> File
+        "PayloadReference": {"File": files},
     }
     
     recipient_entries = []
-    recipient_entries_old = []
     for r_code in recipients_list:
         entry = {
             "RecipientE-Address": r_code,
         }
-        recipient_entries_old.append(
-            {
-                "ReceiverE-address": r_code,
-                "Correspondent": {"CorrespondentCode": r_code},
-            }
-        )
         if encryption_key_b64 and recipient_thumbprint_b64:
             entry["EncryptionInfo"] = {
                 "Key": encryption_key_b64,
@@ -107,20 +99,10 @@ def build_envelope(
             }
         recipient_entries.append(entry)
 
-    sender_addr = sender_e_address or (recipients_list[0] if recipients_list else "_DEFAULT@00000000000")
-    # Sender E-Addresses mirror the recipient list (per DIV examples used in tests).
-    sender_addresses = []
-    for addr in recipients_list:
-        if addr not in sender_addresses:
-            sender_addresses.append(addr)
-    if not sender_addresses:
-        sender_addresses.append(sender_addr)
-
     sender_transport = {
-        "SenderE-Address": sender_addr,
+        "SenderE-Address": sender_e_address or (recipients_list[0] if recipients_list else "_DEFAULT@00000000000"),
         "SenderRefNumber": message_id,
-        "Sender": {"E-Addresses": {"E-Address": sender_addresses}},
-        "Recipients": {"RecipientEntry": recipient_entries, "Recipient": recipient_entries_old},
+        "Recipients": {"RecipientEntry": recipient_entries},
         "NotifySenderOnDelivery": False,
         "Priority": "normal",
         "TraceInfo": {"TraceInfoEntry": [{"TraceInfoID": "Trace1", "TraceText": trace_text[:50]}]},
