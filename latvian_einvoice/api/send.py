@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 from typing import Iterable, Mapping
+from lxml import etree
+from lxml.etree import QName
 from zeep.helpers import serialize_object
 
 from ..attachments import Attachment
@@ -84,7 +86,10 @@ def send_message(
                 if token:
                     kwargs["Token"] = token
                 if connection_id:
-                    kwargs["_soapheaders"] = {"ConnectionId": connection_id}
+                    # WSDL doesn't declare ConnectionId header; inject raw SOAP header element.
+                    conn_el = etree.Element(QName("http://vraa.gov.lv/div/uui/2011/11", "ConnectionId"))
+                    conn_el.text = connection_id
+                    kwargs["_soapheaders"] = [conn_el]
                 response = svc.SendMessage(**kwargs)
             except TypeError:
                 # Fallback for simple stubs expecting positional args
