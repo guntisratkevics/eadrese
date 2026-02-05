@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Iterable, Mapping
 from zeep.helpers import serialize_object
 
@@ -8,6 +9,7 @@ from ..errors import EAddressSoapError
 from ..soap.envelope import build_envelope
 from ..auth import TokenProvider
 from ..soap.client import SoapClient
+from ..utils_crypto import derive_encryption_fields
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,12 @@ def send_message(
     soap_client: SoapClient,
     recipient_personal_code: str,
     connection_id: str | None = None,
+    recipient_cert_path: str | Path | None = None,
+    recipient_cert_pem: bytes | None = None,
+    encryption_key_b64: str | None = None,
+    recipient_thumbprint_b64: str | None = None,
+    symmetric_key_bytes: bytes | None = None,
+    trace_text: str = "Created",
     sender_address: str | None = None,
     document_kind_code: str = "EINVOICE",
     subject: str = "Electronic invoice",
@@ -40,6 +48,16 @@ def send_message(
         if vid_addr and vid_addr not in recipients:
             recipients.append(vid_addr)
 
+    enc_key_b64 = encryption_key_b64
+    thumb_b64 = recipient_thumbprint_b64
+    sym_key = symmetric_key_bytes
+    if recipient_cert_path or recipient_cert_pem:
+        enc_key_b64, thumb_b64, sym_key = derive_encryption_fields(
+            recipient_cert_path=Path(recipient_cert_path) if recipient_cert_path else None,
+            recipient_cert_pem=recipient_cert_pem,
+            key_bytes=symmetric_key_bytes,
+        )
+
     envelope, attachments_input, built_message_id = build_envelope(
         sender_address or cfg.default_from,
         recipients,
@@ -47,6 +65,10 @@ def send_message(
         subject,
         body_text,
         list(attachments),
+        encryption_key_b64=enc_key_b64,
+        recipient_thumbprint_b64=thumb_b64,
+        trace_text=trace_text,
+        symmetric_key_bytes=sym_key,
     )
     logger.debug("Built envelope: %s", envelope)
     
