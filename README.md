@@ -9,6 +9,10 @@ Status / caveats
 - Cryptographic and protocol details are still being validated against the official clients.
 - Response signature and OCSP validation are best-effort.
 
+VRAA operational notes (from support replies)
+- For EINVOICE, the VID subaddress is mandatory; add it manually or enable automatic VID recipient insertion.
+- Test environment message retrieval window is 2 days; replies are sent to the sender e-address.
+
 ## What it does
 - Implements VUS UnifiedService SOAP calls (SendMessage, GetNextMessage, ConfirmMessage, SearchAddressee).
 - Builds DIV Envelope (SenderDocument, Signatures, AttachmentsInput) according to DIV XSD.

@@ -26,6 +26,8 @@ Typical endpoints (adjust for TEST/PROD):
   - optional EncryptionInfo for recipients
 - VID auto add: when `vid_subaddress_auto=True` and DocumentKindCode is EINVOICE, the library adds
   VID subaddress automatically (TEST or PROD).
+- VRAA note: EINVOICE messages must include VID subaddress (mandatory).
+- VRAA note: test environment message retrieval window is 2 days.
 
 ## 5. Signatures
 - SenderDocument signature:
