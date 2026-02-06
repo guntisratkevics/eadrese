@@ -16,7 +16,8 @@ def build_envelope(
     *,
     encryption_key_b64: str | None = None,
     recipient_thumbprint_b64: str | None = None,
-    trace_text: str = "Created",
+    trace_text: str | None = "Created",
+    notify_sender_on_delivery: bool = False,
     symmetric_key_bytes: Optional[bytes] = None,
 ) -> tuple[Mapping[str, object], Sequence[Mapping[str, object]] | None, str]:
     """Builds a minimal DIV EnvelopeStructure equivalent to the Java sidecar."""
@@ -71,21 +72,25 @@ def build_envelope(
             }
         )
 
+    document_kind = {
+        "DocumentKindCode": document_kind_code,
+        "DocumentKindVersion": "1.0",
+    }
+    if document_kind_code != "DOC_EMPTY":
+        document_kind["DocumentKindName"] = document_kind_code
+
     document_metadata = {
         "GeneralMetadata": {
-            "Authors": {"AuthorEntry": [{"Institution": {"Title": "Sender"}}]},
+            "Authors": {"AuthorEntry": [{"Institution": {"Title": sender_e_address or "Sender"}}]},
             "Date": now.date(),
             "Title": subject,
             "Description": body_text,
-            "DocumentKind": {
-                "DocumentKindCode": document_kind_code,
-                "DocumentKindVersion": "1.0",
-                "DocumentKindName": document_kind_code,
-            },
+            "DocumentKind": document_kind,
         },
-        # DIV WSDL expects PayloadReference -> File
-        "PayloadReference": {"File": files},
     }
+    # Include PayloadReference only when attachments exist.
+    if files:
+        document_metadata["PayloadReference"] = {"File": files}
     
     recipient_entries = []
     for r_code in recipients_list:
@@ -103,10 +108,13 @@ def build_envelope(
         "SenderE-Address": sender_e_address or (recipients_list[0] if recipients_list else "_DEFAULT@00000000000"),
         "SenderRefNumber": message_id,
         "Recipients": {"RecipientEntry": recipient_entries},
-        "NotifySenderOnDelivery": False,
+        "NotifySenderOnDelivery": notify_sender_on_delivery,
         "Priority": "normal",
-        "TraceInfo": {"TraceInfoEntry": [{"TraceInfoID": "Trace1", "TraceText": trace_text[:50]}]},
     }
+    if trace_text:
+        sender_transport["TraceInfo"] = {
+            "TraceInfoEntry": [{"TraceInfoID": "Trace1", "TraceText": trace_text[:50]}]
+        }
 
     # Minimal ds:Signature (structure valid for XSD; not cryptographically verified here).
     digest_source = attachments[0].content if attachments else (body_text or "").encode("utf-8")

@@ -48,3 +48,6 @@ class EAddressConfig:
     trust_store_path: Optional[Path] = None  # PEM bundle of trusted issuers (server cert chain)
     verify_response_ocsp: bool = False  # requires network to OCSP responders
     response_cert_path: Optional[Path] = None  # optional explicit server cert for signature verify
+
+    # SenderDocument signature algorithm (sha256/sha512)
+    sender_sig_hash: str = "sha512"

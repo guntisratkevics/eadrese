@@ -1,47 +1,53 @@
-# Python E-Adrese Client Specification
+# Python E-Address Client Specification
 
 ## 1. Overview
-This library (`latvian_einvoice`) is a pure Python implementation for the Latvian E-Address (VRAA VUS) and VID EDS e-invoice integration, designed to work without official Java/.NET libraries.
+`latvian_einvoice` is a pure Python implementation of Latvia's E-Address (VRAA VUS / DIV) and VID EDS e-invoice flow.
+It mirrors the behavior of the official Java/.NET clients where possible, but it is experimental and partially
+reverse-engineered.
 
-## 2. Requirements Deducing (from instructions)
+## 2. Endpoints
+Typical endpoints (adjust for TEST/PROD):
+- WSDL (PROD): https://div.vraa.gov.lv/UnifiedService.svc?wsdl
+- Token URL (PROD): https://div.vraa.gov.lv/Auth/token
+- WSDL (TEST): https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl
 
-### 2.1 Endpoints
-*   **WSDL**: `https://div.vraa.gov.lv/UnifiedService.svc?wsdl` (Production)
-*   **Token URL**: `https://div.vraa.gov.lv/Auth/token`
-*   **Environment**: Supports `PROD` and `TEST` (configured via URLs).
+## 3. Authentication and transport
+- mTLS is required by VUS/DIV. Configure `client_cert_path` and `client_key_path` (PEM).
+- OAuth2 client-credentials is supported via `client_id`/`client_secret` and `token_url`.
+- Some test environments accept mTLS-only without OAuth; keep OAuth optional in code.
 
-### 2.2 Authentication
-*   **Protocol**: OAuth 2.0 Client Credentials Grant.
-*   **Credentials**: `client_id`, `client_secret`.
-*   **Token Caching**: Tokens must be cached until `expires_in - 60s` to avoid rate limits.
-*   **TLS/SSL**: Mandatory. Mutual TLS (mTLS) with client certificate (`certificate`, `private_key`) is supported and required for VUS.
+## 4. Message model
+- DIV Envelope with SenderDocument + Signatures (XMLDSig + XAdES-BES).
+- SendMessage supports:
+  - document_kind_code (DOC_EMPTY or EINVOICE)
+  - subject/body_text
+  - recipients (personal code or e-address)
+  - optional attachments (with optional AES-GCM encryption)
+  - optional EncryptionInfo for recipients
+- VID auto add: when `vid_subaddress_auto=True` and DocumentKindCode is EINVOICE, the library adds
+  VID subaddress automatically (TEST or PROD).
 
-### 2.3 Message Model
-*   **Mandatory Fields**:
-    *   `From`: Sender personal code or registration number.
-    *   `To`: Recipient personal code (or list of recipients).
-    *   `DocumentKind`: Must be `EINVOICE` for e-invoices.
-    *   `Attachments`: At least one XML file (UBL format) is expected for e-invoices.
-*   **Aliases (Test Environment)**:
-    *   Sender: `_DEFAULT@90000000000`
-    *   Recipient: `_PRIVATE@10000000000`
+## 5. Signatures
+- SenderDocument signature:
+  - XMLDSig RSA-SHA512
+  - SHA-512 digests
+  - XAdES v1.3.2 SignedProperties (SHA-1 cert digest)
+  - SenderDocument reference uses exclusive C14N
+- SOAP WS-Security signature:
+  - RSA-SHA1 / SHA1 digests (matches Java profile)
+  - Timestamp + To are signed
+  - BinarySecurityToken + SecurityTokenReference
 
-### 2.4 Receiving & Confirmation
-*   `GetNextMessage`: Retrieves the next available message from the queue. Configurable to include attachments.
-*   `ConfirmMessage`: Acknowledges receipt of a specific `message_id`. This is critical to remove the message from the queue.
+## 6. Receiving and confirmation
+- GetNextMessage retrieves messages (with optional attachments).
+- ConfirmMessage acknowledges the message and removes it from the queue.
+- Optional decryption for attachments when EncryptionInfo and private key are provided.
 
-### 2.5 Attachments
-*   Base64 encoded content.
-*   Structure: `FileName`, `MimeType`, `Content`.
-
-## 3. Architecture
-The package follows a modular structure:
-*   `client.py`: Main Facade.
-*   `auth.py`: Token management.
-*   `soap/`: Low-level SOAP handling (Zeep).
-*   `api/`: Functional implementations for Send, Receive, Confirm, Search.
-
-## 4. Configuration
-Key configuration parameters in `EAddressConfig`:
-*   `vid_subaddress_auto`: Automatically adds VID as a recipient for e-invoices.
-*   `vid_subaddress`: Configurable VID address (defaults to PROD/TEST values based on environment).
+## 7. Configuration
+Key parameters in `EAddressConfig`:
+- client_id, client_secret, token_url (OAuth)
+- certificate, private_key (WSSE signing)
+- client_cert_path, client_key_path (mTLS)
+- wsse_signing, wsse_verify, wsse_timestamp
+- vid_subaddress_auto, vid_subaddress
+- default_from, default_to

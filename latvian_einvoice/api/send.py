@@ -1,8 +1,6 @@
 import logging
 from pathlib import Path
 from typing import Iterable, Mapping
-from lxml import etree
-from lxml.etree import QName
 from zeep.helpers import serialize_object
 
 from ..attachments import Attachment
@@ -27,6 +25,7 @@ def send_message(
     recipient_thumbprint_b64: str | None = None,
     symmetric_key_bytes: bytes | None = None,
     trace_text: str = "Created",
+    notify_sender_on_delivery: bool = False,
     sender_address: str | None = None,
     document_kind_code: str = "EINVOICE",
     subject: str = "Electronic invoice",
@@ -70,6 +69,7 @@ def send_message(
         encryption_key_b64=enc_key_b64,
         recipient_thumbprint_b64=thumb_b64,
         trace_text=trace_text,
+        notify_sender_on_delivery=notify_sender_on_delivery,
         symmetric_key_bytes=sym_key,
     )
     logger.debug("Built envelope: %s", envelope)
@@ -85,11 +85,7 @@ def send_message(
                 }
                 if token:
                     kwargs["Token"] = token
-                if connection_id:
-                    # WSDL doesn't declare ConnectionId header; inject raw SOAP header element.
-                    conn_el = etree.Element(QName("http://vraa.gov.lv/div/uui/2011/11", "ConnectionId"))
-                    conn_el.text = connection_id
-                    kwargs["_soapheaders"] = [conn_el]
+                # Java client does not send ConnectionId in SOAP headers; keep payload aligned.
                 response = svc.SendMessage(**kwargs)
             except TypeError:
                 # Fallback for simple stubs expecting positional args
