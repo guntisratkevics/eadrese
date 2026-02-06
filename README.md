@@ -47,7 +47,7 @@ cfg = EAddressConfig(
     wsse_signing=True,
     wsse_verify=False,
     wsdl_url="https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
-    default_from="_PRIVATE@40103166694",
+    default_from="_PRIVATE@<REG_NO>",
     client_cert_path="/path/to/client.crt.pem",
     client_key_path="/path/to/client.key.pem",
     certificate="/path/to/client.crt.pem",
@@ -57,7 +57,7 @@ cfg = EAddressConfig(
 
 client = EAddressClient(cfg)
 client.send_message(
-    recipient_personal_code="_GATIS@90001733697",
+    recipient_personal_code="_PRIVATE@<TEST_RECIPIENT>",
     document_kind_code="DOC_EMPTY",
     subject="Hello",
     body_text="Smoke test",
