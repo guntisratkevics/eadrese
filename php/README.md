@@ -58,6 +58,16 @@ $result = $client->sendTextMessage(
 );
 ```
 
+Example script (reads env vars: `DIV_SIDECAR_URL`, `DIV_CONNECTION_ID`, `DIV_RECIPIENT`):
+```bash
+php examples/sidecar_send.php
+```
+
+Running via Docker on a host that exposes the sidecar on `127.0.0.1`:
+```bash
+sudo docker run --rm --network host -v /path/to/php:/app -w /app php:8.2-cli php examples/sidecar_send.php
+```
+
 ## Composer
 ```bash
 composer install
