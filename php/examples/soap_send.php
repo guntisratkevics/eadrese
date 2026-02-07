@@ -47,6 +47,15 @@ $client = new Client($cfg);
 $subject = 'PHP SOAP smoke ' . gmdate('Y-m-d\\TH:i:s\\Z');
 $result = $client->sendTextMessageSoap([$recipient], $subject, 'Hello from PHP SOAP');
 
+$debugDir = getenv('DIV_DEBUG_DIR') ?: '';
+if ($debugDir !== '') {
+    if (!is_dir($debugDir)) {
+        @mkdir($debugDir, 0700, true);
+    }
+    @file_put_contents(rtrim($debugDir, '/') . '/php_request.xml', (string)($result['request_xml'] ?? ''));
+    @file_put_contents(rtrim($debugDir, '/') . '/php_response.raw', (string)($result['raw'] ?? ''));
+}
+
 $out = [
     'status' => $result['status'] ?? null,
     'message_id' => $result['body']['MessageId'] ?? null,
