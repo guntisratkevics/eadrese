@@ -6,6 +6,7 @@ It focuses on configuration and envelope construction. SOAP/WSSE signing is not 
 ## Status
 - Envelope builder (SenderDocument + attachments metadata).
 - AES-GCM payload encryption helper (outbound placeholder).
+- OAEP+AES-CBC outbound helper (DIV-aligned mode).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
 - Sidecar HTTP client for send/list/confirm (uses the Java sidecar API).
 - SOAP transport and WS-Security signing are not implemented.
@@ -30,7 +31,9 @@ $config = new Config(
 $client = new Client($config);
 
 $attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
-[$encKeyB64, $thumbB64, $symKey] = Crypto::deriveEncryptionFields(file_get_contents('/path/to/recipient.crt.pem'));
+[$encKeyB64, $thumbB64, $symKey, $symIv] = Crypto::deriveEncryptionFieldsOaepCbc(
+    file_get_contents('/path/to/recipient.crt.pem')
+);
 
 [$envelope, $attachmentsInput, $messageId] = $client->buildEnvelope(
     recipients: ['_PRIVATE@<RECIPIENT>'],
@@ -40,7 +43,9 @@ $attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
     attachments: $attachments,
     encryptionKeyB64: $encKeyB64,
     recipientThumbprintB64: $thumbB64,
-    symmetricKeyBytes: $symKey
+    symmetricKeyBytes: $symKey,
+    symmetricIvBytes: $symIv,
+    encryptionMode: 'oaep_cbc'
 );
 ```
 

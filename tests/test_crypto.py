@@ -55,7 +55,7 @@ def test_encrypt_payload_roundtrip():
 
 def test_derive_encryption_fields_and_decrypt():
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, thumb_b64, sym_key = derive_encryption_fields(recipient_cert_pem=cert_pem, key_bytes=b"1" * 32)
+    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem, key_bytes=b"1" * 32)
     # Encrypted key can be decrypted with private key
     decrypted = decrypt_key_with_private(key_pem, enc_key_b64)
     assert decrypted == b"1" * 32
@@ -68,7 +68,7 @@ def test_derive_encryption_fields_and_decrypt():
 
 def test_build_envelope_with_encryption_populates_ciphertext():
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, thumb_b64, sym_key = derive_encryption_fields(recipient_cert_pem=cert_pem)
+    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem)
     attachments = [Attachment(filename="a.txt", content=b"ABC", content_type="text/plain")]
     envelope, attachments_input, _ = build_envelope(
         sender_e_address="_DEFAULT@90000000000",

@@ -66,7 +66,7 @@ class DummySoapClient:
 
 def test_get_next_message_decrypts_attachments_and_confirms(tmp_path, monkeypatch):
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, thumb_b64, sym_key = derive_encryption_fields(recipient_cert_pem=cert_pem)
+    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem)
     iv, ct = encrypt_payload_aes_gcm(sym_key, b"secret-bytes")
 
     response_payload = {

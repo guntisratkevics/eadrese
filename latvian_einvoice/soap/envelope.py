@@ -1,10 +1,11 @@
 import base64
+import os
 import uuid
 import datetime as _dt
 from typing import List, Mapping, Sequence, Optional
 from ..attachments import Attachment
 from ..utils import tz_riga
-from ..utils_crypto import encrypt_payload_aes_gcm
+from ..utils_crypto import encrypt_payload_aes_gcm, encrypt_payload_aes_cbc_pkcs5
 
 def build_envelope(
     sender_e_address: str,
@@ -19,6 +20,8 @@ def build_envelope(
     trace_text: str | None = "Created",
     notify_sender_on_delivery: bool = False,
     symmetric_key_bytes: Optional[bytes] = None,
+    symmetric_iv_bytes: Optional[bytes] = None,
+    encryption_mode: str = "gcm",
 ) -> tuple[Mapping[str, object], Sequence[Mapping[str, object]] | None, str]:
     """Builds a minimal DIV EnvelopeStructure equivalent to the Java sidecar."""
     now = _dt.datetime.now(tz=tz_riga())
@@ -27,13 +30,21 @@ def build_envelope(
 
     attachments_input_items = []
     files = []
+    use_cbc = bool(symmetric_key_bytes and encryption_mode.lower() in ("oaep_cbc", "cbc"))
+    cbc_iv = symmetric_iv_bytes if use_cbc else None
+    if use_cbc and cbc_iv is None:
+        cbc_iv = os.urandom(16)
+
     for idx, att in enumerate(attachments, start=1):
         payload_bytes = att.content
         iv = cipher_with_tag = None
         # Encrypt payload if we have a symmetric key
         if symmetric_key_bytes:
-            iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, att.content)
-            payload_bytes = cipher_with_tag
+            if use_cbc:
+                payload_bytes = encrypt_payload_aes_cbc_pkcs5(symmetric_key_bytes, cbc_iv, att.content)
+            else:
+                iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, att.content)
+                payload_bytes = cipher_with_tag
 
         content_id = str(idx - 1)
         digest = att.sha512_digest() if hasattr(att, "sha512_digest") else b""
@@ -44,13 +55,19 @@ def build_envelope(
                 # If encrypted, send IV and CipherText separately; else fall back to plain base64 content.
                 **(
                     {
-                        "IV": base64.b64encode(iv).decode("ascii"),
-                        "CipherText": base64.b64encode(cipher_with_tag).decode("ascii"),
-                    }
-                    if symmetric_key_bytes
-                    else {
                         "Contents": base64.b64encode(payload_bytes).decode("ascii"),
                     }
+                    if use_cbc
+                    else (
+                        {
+                            "IV": base64.b64encode(iv).decode("ascii"),
+                            "CipherText": base64.b64encode(cipher_with_tag).decode("ascii"),
+                        }
+                        if symmetric_key_bytes
+                        else {
+                            "Contents": base64.b64encode(payload_bytes).decode("ascii"),
+                        }
+                    )
                 ),
             }
         )

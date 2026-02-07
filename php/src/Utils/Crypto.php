@@ -21,6 +21,16 @@ final class Crypto
         return [$encKey, $thumb, $key];
     }
 
+    public static function deriveEncryptionFieldsOaepCbc(string $certPem, ?string $keyBytes = null, ?string $ivBytes = null): array
+    {
+        $key = $keyBytes ?? random_bytes(32);
+        $iv = $ivBytes ?? random_bytes(16);
+        $blob = self::buildDivKeyBlob($key, $iv);
+        $encKey = self::encryptKeyOaepSha1($certPem, $blob);
+        $thumb = self::thumbprintSha1B64($certPem);
+        return [$encKey, $thumb, $key, $iv];
+    }
+
     public static function encryptKeyPkcs1v15(string $certPem, string $keyBytes): string
     {
         $pub = openssl_pkey_get_public($certPem);
@@ -28,6 +38,19 @@ final class Crypto
             throw new \RuntimeException('Invalid certificate PEM');
         }
         $ok = openssl_public_encrypt($keyBytes, $encrypted, $pub, OPENSSL_PKCS1_PADDING);
+        if (!$ok) {
+            throw new \RuntimeException('Failed to encrypt key');
+        }
+        return base64_encode($encrypted);
+    }
+
+    public static function encryptKeyOaepSha1(string $certPem, string $keyBytes): string
+    {
+        $pub = openssl_pkey_get_public($certPem);
+        if ($pub === false) {
+            throw new \RuntimeException('Invalid certificate PEM');
+        }
+        $ok = openssl_public_encrypt($keyBytes, $encrypted, $pub, OPENSSL_PKCS1_OAEP_PADDING);
         if (!$ok) {
             throw new \RuntimeException('Failed to encrypt key');
         }
@@ -46,6 +69,17 @@ final class Crypto
         return [$iv, $ct . $tag];
     }
 
+    public static function encryptPayloadAesCbc(string $key, string $iv, string $plaintext): string
+    {
+        $cipher = self::cipherForKey(strlen($key), 'cbc');
+        $pt = self::pkcs7Pad($plaintext, 16);
+        $ct = openssl_encrypt($pt, $cipher, $key, OPENSSL_RAW_DATA, $iv);
+        if ($ct === false) {
+            throw new \RuntimeException('Failed to encrypt payload');
+        }
+        return $ct;
+    }
+
     public static function decryptDivKey(string $privateKeyPem, string $encKeyB64): array
     {
         $priv = openssl_pkey_get_private($privateKeyPem);
@@ -57,15 +91,18 @@ final class Crypto
         if (!$ok || $raw === null || $raw === '') {
             throw new \RuntimeException('Failed to decrypt DIV key');
         }
-        $keyLen = ord($raw[0]);
+        if (strlen($raw) < 4) {
+            throw new \RuntimeException('Invalid key blob size');
+        }
+        $keyLen = unpack('N', substr($raw, 0, 4))[1];
         if (!in_array($keyLen, [16, 24, 32], true)) {
             throw new \RuntimeException('Unexpected AES key length');
         }
-        if (strlen($raw) < 1 + $keyLen + 16) {
+        if (strlen($raw) < 4 + $keyLen + 16) {
             throw new \RuntimeException('Invalid key blob size');
         }
-        $key = substr($raw, 1, $keyLen);
-        $iv = substr($raw, 1 + $keyLen);
+        $key = substr($raw, 4, $keyLen);
+        $iv = substr($raw, 4 + $keyLen);
         if (strlen($iv) !== 16) {
             throw new \RuntimeException('Invalid IV length');
         }
@@ -80,6 +117,17 @@ final class Crypto
             throw new \RuntimeException('Failed to decrypt payload');
         }
         return $pt;
+    }
+
+    private static function buildDivKeyBlob(string $key, string $iv): string
+    {
+        return pack('N', strlen($key)) . $key . $iv;
+    }
+
+    private static function pkcs7Pad(string $data, int $blockSize): string
+    {
+        $pad = $blockSize - (strlen($data) % $blockSize);
+        return $data . str_repeat(chr($pad), $pad);
     }
 
     private static function cipherForKey(int $keyLen, string $mode): string

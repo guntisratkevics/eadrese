@@ -22,6 +22,7 @@ final class Config
 
     public bool $vidSubaddressAuto;
     public ?string $vidSubaddress;
+    public string $encryptionMode;
 
     public function __construct(
         string $wsdlUrl,
@@ -36,7 +37,8 @@ final class Config
         string $defaultFrom = '_DEFAULT@90000000000',
         string $defaultTo = '_PRIVATE@10000000000',
         bool $vidSubaddressAuto = false,
-        ?string $vidSubaddress = null
+        ?string $vidSubaddress = null,
+        string $encryptionMode = 'gcm'
     ) {
         $this->wsdlUrl = $wsdlUrl;
         $this->tokenUrl = $tokenUrl;
@@ -51,5 +53,6 @@ final class Config
         $this->defaultTo = $defaultTo;
         $this->vidSubaddressAuto = $vidSubaddressAuto;
         $this->vidSubaddress = $vidSubaddress;
+        $this->encryptionMode = $encryptionMode;
     }
 }

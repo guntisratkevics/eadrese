@@ -51,3 +51,6 @@ class EAddressConfig:
 
     # SenderDocument signature algorithm (sha256/sha512)
     sender_sig_hash: str = "sha512"
+
+    # Outbound payload encryption mode: "gcm" (default) or "oaep_cbc"
+    outbound_encryption: str = "gcm"

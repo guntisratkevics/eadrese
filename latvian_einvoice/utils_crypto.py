@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization, padding as sym_padding
-from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -31,6 +31,20 @@ def encrypt_key_for_recipient(cert_pem: bytes, key_bytes: bytes) -> str:
     return base64.b64encode(encrypted).decode("ascii")
 
 
+def encrypt_key_for_recipient_oaep_sha1(cert_pem: bytes, key_bytes: bytes) -> str:
+    cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
+    public_key = cert.public_key()
+    encrypted = public_key.encrypt(
+        key_bytes,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(encrypted).decode("ascii")
+
+
 def generate_symmetric_key(length: int = 32) -> bytes:
     return os.urandom(length)
 
@@ -40,15 +54,22 @@ def derive_encryption_fields(
     recipient_cert_path: Optional[Path] = None,
     recipient_cert_pem: Optional[bytes] = None,
     key_bytes: Optional[bytes] = None,
-) -> Tuple[str, str, bytes]:
+    iv_bytes: Optional[bytes] = None,
+    mode: str = "gcm",
+) -> Tuple[str, str, bytes, Optional[bytes]]:
     if not recipient_cert_pem:
         if not recipient_cert_path:
             raise ValueError("Recipient certificate is required for EncryptionInfo")
         recipient_cert_pem = load_cert_bytes(recipient_cert_path)
     key = key_bytes or generate_symmetric_key()
-    enc_key_b64 = encrypt_key_for_recipient(recipient_cert_pem, key)
     thumb_b64 = thumbprint_sha1_b64(recipient_cert_pem)
-    return enc_key_b64, thumb_b64, key
+    if mode.lower() in ("oaep_cbc", "cbc"):
+        iv = iv_bytes or os.urandom(16)
+        key_blob = build_div_key_blob(key, iv)
+        enc_key_b64 = encrypt_key_for_recipient_oaep_sha1(recipient_cert_pem, key_blob)
+        return enc_key_b64, thumb_b64, key, iv
+    enc_key_b64 = encrypt_key_for_recipient(recipient_cert_pem, key)
+    return enc_key_b64, thumb_b64, key, None
 
 
 def encrypt_payload_aes_gcm(key: bytes, plaintext: bytes, aad: bytes = b"") -> Tuple[bytes, bytes]:
@@ -57,6 +78,14 @@ def encrypt_payload_aes_gcm(key: bytes, plaintext: bytes, aad: bytes = b"") -> T
     aesgcm = AESGCM(key)
     ct = aesgcm.encrypt(iv, plaintext, aad)
     return iv, ct
+
+
+def encrypt_payload_aes_cbc_pkcs5(key: bytes, iv: bytes, plaintext: bytes) -> bytes:
+    padder = sym_padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
 
 
 def decrypt_key_with_private(private_key_pem: bytes, enc_key_b64: str) -> bytes:
@@ -87,6 +116,43 @@ def decrypt_payload_aes_cbc_pkcs5(key: bytes, iv: bytes, ciphertext: bytes) -> b
     padded = decryptor.update(ciphertext) + decryptor.finalize()
     unpadder = sym_padding.PKCS7(128).unpadder()
     return unpadder.update(padded) + unpadder.finalize()
+
+
+def build_div_key_blob(key: bytes, iv: bytes) -> bytes:
+    return len(key).to_bytes(4, "big") + key + iv
+
+
+def _decode_modexp(value: str) -> int:
+    raw = None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except Exception:
+        raw = None
+    if raw:
+        return int.from_bytes(raw, "big")
+    try:
+        return int(value, 16)
+    except Exception as exc:
+        raise ValueError("Invalid modulus/exponent encoding") from exc
+
+
+def rsa_public_key_from_modexp(modulus_b64: str, exponent_b64: str) -> rsa.RSAPublicKey:
+    modulus = _decode_modexp(modulus_b64)
+    exponent = _decode_modexp(exponent_b64)
+    public_numbers = rsa.RSAPublicNumbers(exponent, modulus)
+    return public_numbers.public_key(default_backend())
+
+
+def encrypt_key_blob_oaep_sha1(public_key: rsa.RSAPublicKey, key_blob: bytes) -> str:
+    encrypted = public_key.encrypt(
+        key_blob,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(encrypted).decode("ascii")
 
 
 # Optional OCSP validation (best-effort)

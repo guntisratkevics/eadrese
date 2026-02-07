@@ -29,8 +29,10 @@ final class Client
         ?string $encryptionKeyB64 = null,
         ?string $recipientThumbprintB64 = null,
         ?string $symmetricKeyBytes = null,
+        ?string $symmetricIvBytes = null,
         ?string $traceText = 'Created',
-        bool $notifySenderOnDelivery = false
+        bool $notifySenderOnDelivery = false,
+        ?string $encryptionMode = null
     ): array {
         return Builder::buildEnvelope(
             $this->config->defaultFrom,
@@ -42,6 +44,8 @@ final class Client
             $encryptionKeyB64,
             $recipientThumbprintB64,
             $symmetricKeyBytes,
+            $symmetricIvBytes,
+            $encryptionMode ?? $this->config->encryptionMode,
             $traceText,
             $notifySenderOnDelivery
         );

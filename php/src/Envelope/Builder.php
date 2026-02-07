@@ -24,6 +24,8 @@ final class Builder
         ?string $encryptionKeyB64 = null,
         ?string $recipientThumbprintB64 = null,
         ?string $symmetricKeyBytes = null,
+        ?string $symmetricIvBytes = null,
+        string $encryptionMode = 'gcm',
         ?string $traceText = 'Created',
         bool $notifySenderOnDelivery = false
     ): array {
@@ -33,18 +35,29 @@ final class Builder
 
         $attachmentsInputItems = [];
         $files = [];
+        $useCbc = $symmetricKeyBytes !== null && in_array(strtolower($encryptionMode), ['oaep_cbc', 'cbc'], true);
+        $cbcIv = $useCbc ? ($symmetricIvBytes ?? random_bytes(16)) : null;
+
         foreach ($attachments as $idx => $att) {
             $contentId = (string)$idx;
             $payloadBytes = $att->content;
 
             if ($symmetricKeyBytes !== null) {
-                [$iv, $cipherWithTag] = Crypto::encryptPayloadAesGcm($symmetricKeyBytes, $att->content);
-                $payloadBytes = $cipherWithTag;
-                $attachmentsInputItems[] = [
-                    'ContentId' => $contentId,
-                    'IV' => base64_encode($iv),
-                    'CipherText' => base64_encode($cipherWithTag),
-                ];
+                if ($useCbc) {
+                    $payloadBytes = Crypto::encryptPayloadAesCbc($symmetricKeyBytes, $cbcIv, $att->content);
+                    $attachmentsInputItems[] = [
+                        'ContentId' => $contentId,
+                        'Contents' => base64_encode($payloadBytes),
+                    ];
+                } else {
+                    [$iv, $cipherWithTag] = Crypto::encryptPayloadAesGcm($symmetricKeyBytes, $att->content);
+                    $payloadBytes = $cipherWithTag;
+                    $attachmentsInputItems[] = [
+                        'ContentId' => $contentId,
+                        'IV' => base64_encode($iv),
+                        'CipherText' => base64_encode($cipherWithTag),
+                    ];
+                }
             } else {
                 $attachmentsInputItems[] = [
                     'ContentId' => $contentId,

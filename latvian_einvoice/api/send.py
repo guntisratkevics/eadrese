@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Iterable, Mapping
 from zeep.helpers import serialize_object
@@ -9,7 +10,12 @@ from ..errors import EAddressSoapError
 from ..soap.envelope import build_envelope
 from ..auth import TokenProvider
 from ..soap.client import SoapClient
-from ..utils_crypto import derive_encryption_fields
+from ..utils_crypto import (
+    derive_encryption_fields,
+    rsa_public_key_from_modexp,
+    build_div_key_blob,
+    encrypt_key_blob_oaep_sha1,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +27,13 @@ def send_message(
     connection_id: str | None = None,
     recipient_cert_path: str | Path | None = None,
     recipient_cert_pem: bytes | None = None,
+    recipient_public_key_modulus_b64: str | None = None,
+    recipient_public_key_exponent_b64: str | None = None,
     encryption_key_b64: str | None = None,
     recipient_thumbprint_b64: str | None = None,
     symmetric_key_bytes: bytes | None = None,
+    symmetric_iv_bytes: bytes | None = None,
+    encryption_mode: str | None = None,
     trace_text: str = "Created",
     notify_sender_on_delivery: bool = False,
     sender_address: str | None = None,
@@ -49,14 +59,28 @@ def send_message(
         if vid_addr and vid_addr not in recipients:
             recipients.append(vid_addr)
 
+    mode = (encryption_mode or cfg.outbound_encryption or "gcm").lower()
     enc_key_b64 = encryption_key_b64
     thumb_b64 = recipient_thumbprint_b64
     sym_key = symmetric_key_bytes
-    if recipient_cert_path or recipient_cert_pem:
-        enc_key_b64, thumb_b64, sym_key = derive_encryption_fields(
+    sym_iv = symmetric_iv_bytes
+    if recipient_public_key_modulus_b64 and recipient_public_key_exponent_b64 and thumb_b64:
+        public_key = rsa_public_key_from_modexp(
+            recipient_public_key_modulus_b64, recipient_public_key_exponent_b64
+        )
+        sym_key = sym_key or os.urandom(32)
+        if mode not in ("oaep_cbc", "cbc"):
+            raise EAddressSoapError("Recipient public key requires oaep_cbc mode")
+        sym_iv = sym_iv or os.urandom(16)
+        key_blob = build_div_key_blob(sym_key, sym_iv)
+        enc_key_b64 = encrypt_key_blob_oaep_sha1(public_key, key_blob)
+    elif recipient_cert_path or recipient_cert_pem:
+        enc_key_b64, thumb_b64, sym_key, sym_iv = derive_encryption_fields(
             recipient_cert_path=Path(recipient_cert_path) if recipient_cert_path else None,
             recipient_cert_pem=recipient_cert_pem,
             key_bytes=symmetric_key_bytes,
+            iv_bytes=symmetric_iv_bytes,
+            mode=mode,
         )
 
     envelope, attachments_input, built_message_id = build_envelope(
@@ -71,6 +95,8 @@ def send_message(
         trace_text=trace_text,
         notify_sender_on_delivery=notify_sender_on_delivery,
         symmetric_key_bytes=sym_key,
+        symmetric_iv_bytes=sym_iv,
+        encryption_mode=mode,
     )
     logger.debug("Built envelope: %s", envelope)
     
