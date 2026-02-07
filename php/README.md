@@ -55,8 +55,8 @@ use LatvianEinvoice\\SidecarClient;
 
 $client = new SidecarClient('http://127.0.0.1:18080');
 $result = $client->sendTextMessage(
-    connectionId: 'P40103166694_01',
-    recipient: '_GATIS@90001733697',
+    connectionId: 'P<REG_NO>_01',
+    recipient: '_PRIVATE@<RECIPIENT_REG_NO>',
     subject: 'PHP smoke test',
     body: 'Hello from PHP',
     unsigned: false

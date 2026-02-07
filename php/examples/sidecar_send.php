@@ -7,8 +7,8 @@ require_once __DIR__ . '/../src/SidecarClient.php';
 use LatvianEinvoice\SidecarClient;
 
 $baseUrl = getenv('DIV_SIDECAR_URL') ?: 'http://127.0.0.1:18080';
-$connectionId = getenv('DIV_CONNECTION_ID') ?: 'P40103166694_01';
-$recipient = getenv('DIV_RECIPIENT') ?: '_GATIS@90001733697';
+$connectionId = getenv('DIV_CONNECTION_ID') ?: 'P<REG_NO>_01';
+$recipient = getenv('DIV_RECIPIENT') ?: '_PRIVATE@<RECIPIENT_REG_NO>';
 
 $subject = 'PHP smoke test ' . gmdate('Y-m-d\\TH:i:s\\Z');
 
