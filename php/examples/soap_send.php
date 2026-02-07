@@ -2,7 +2,20 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../vendor/autoload.php';
+// Local PSR-4 autoloader (avoids requiring Composer on target hosts).
+spl_autoload_register(static function (string $class): void {
+    $prefix = 'LatvianEinvoice\\';
+    $baseDir = __DIR__ . '/../src/';
+    $len = strlen($prefix);
+    if (strncmp($prefix, $class, $len) !== 0) {
+        return;
+    }
+    $relative = substr($class, $len);
+    $file = $baseDir . str_replace('\\', '/', $relative) . '.php';
+    if (is_file($file)) {
+        require_once $file;
+    }
+});
 
 use LatvianEinvoice\Client;
 use LatvianEinvoice\Config;
@@ -34,5 +47,9 @@ $client = new Client($cfg);
 $subject = 'PHP SOAP smoke ' . gmdate('Y-m-d\\TH:i:s\\Z');
 $result = $client->sendTextMessageSoap([$recipient], $subject, 'Hello from PHP SOAP');
 
-echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
-
+$out = [
+    'status' => $result['status'] ?? null,
+    'message_id' => $result['body']['MessageId'] ?? null,
+    'local_sender_ref' => $result['message_id'] ?? null,
+];
+echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
