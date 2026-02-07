@@ -53,4 +53,10 @@ $out = [
     'fault' => $result['body']['Fault'] ?? null,
     'local_sender_ref' => $result['message_id'] ?? null,
 ];
+
+if (getenv('DIV_DEBUG_RAW') && ($out['status'] ?? 0) !== 200) {
+    $raw = (string)($result['raw'] ?? '');
+    $out['raw_len'] = strlen($raw);
+    $out['raw_preview'] = substr($raw, 0, 2000);
+}
 echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
