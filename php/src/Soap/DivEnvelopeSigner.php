@@ -95,7 +95,48 @@ final class DivEnvelopeSigner
         $refSender->appendChild($dvSender);
         $signedInfoEl->appendChild($refSender);
 
-        // XAdES QualifyingProperties + SignedProperties
+        // Reference: SignedProperties (no transforms)
+        $refSp = $doc->createElementNS(self::NS_DS, 'ds:Reference');
+        $refSp->setAttribute('URI', '#' . $signedPropsId);
+        $refSp->setAttribute('Type', 'http://uri.etsi.org/01903#SignedProperties');
+        $dm2 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
+        $dm2->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmlenc#sha512');
+        $refSp->appendChild($dm2);
+        $dvSp = $doc->createElementNS(self::NS_DS, 'ds:DigestValue');
+        $refSp->appendChild($dvSp);
+        $signedInfoEl->appendChild($refSp);
+
+        // SignatureValue placeholder (must come before KeyInfo/Object per xmldsig schema)
+        $sigValueEl = $doc->createElementNS(self::NS_DS, 'ds:SignatureValue');
+        $sigValueEl->setAttribute('Id', $signatureValueId);
+        $sigEl->appendChild($sigValueEl);
+
+        // KeyInfo (must come before Object per xmldsig schema)
+        $keyInfoEl = $doc->createElementNS(self::NS_DS, 'ds:KeyInfo');
+        $keyInfoEl->setAttribute('Id', 'ds-KeyInfo');
+        $sigEl->appendChild($keyInfoEl);
+
+        $keyValueEl = $doc->createElementNS(self::NS_DS, 'ds:KeyValue');
+        $rsaKeyValueEl = $doc->createElementNS(self::NS_DS, 'ds:RSAKeyValue');
+        $rsaKeyValueEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:Modulus', $modB64));
+        $rsaKeyValueEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:Exponent', $expB64));
+        $keyValueEl->appendChild($rsaKeyValueEl);
+        $keyInfoEl->appendChild($keyValueEl);
+
+        $x509DataEl = $doc->createElementNS(self::NS_DS, 'ds:X509Data');
+        $x509DataEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509Certificate', $certDerB64));
+        if ($subjectName !== '') {
+            $x509DataEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509SubjectName', $subjectName));
+        }
+        if ($issuerName !== '' && $serial !== '') {
+            $issuerSerial2El = $doc->createElementNS(self::NS_DS, 'ds:X509IssuerSerial');
+            $issuerSerial2El->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509IssuerName', $issuerName));
+            $issuerSerial2El->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial));
+            $x509DataEl->appendChild($issuerSerial2El);
+        }
+        $keyInfoEl->appendChild($x509DataEl);
+
+        // XAdES QualifyingProperties + SignedProperties (must be inside ds:Object; ds:Object must come last)
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
@@ -136,47 +177,6 @@ final class DivEnvelopeSigner
         $issuerSerialEl->appendChild($issuerNameEl);
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
-
-        // Reference: SignedProperties (no transforms)
-        $refSp = $doc->createElementNS(self::NS_DS, 'ds:Reference');
-        $refSp->setAttribute('URI', '#' . $signedPropsId);
-        $refSp->setAttribute('Type', 'http://uri.etsi.org/01903#SignedProperties');
-        $dm2 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
-        $dm2->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmlenc#sha512');
-        $refSp->appendChild($dm2);
-        $dvSp = $doc->createElementNS(self::NS_DS, 'ds:DigestValue');
-        $refSp->appendChild($dvSp);
-        $signedInfoEl->appendChild($refSp);
-
-        // SignatureValue placeholder
-        $sigValueEl = $doc->createElementNS(self::NS_DS, 'ds:SignatureValue');
-        $sigValueEl->setAttribute('Id', $signatureValueId);
-        $sigEl->appendChild($sigValueEl);
-
-        // KeyInfo
-        $keyInfoEl = $doc->createElementNS(self::NS_DS, 'ds:KeyInfo');
-        $keyInfoEl->setAttribute('Id', 'ds-KeyInfo');
-        $sigEl->appendChild($keyInfoEl);
-
-        $keyValueEl = $doc->createElementNS(self::NS_DS, 'ds:KeyValue');
-        $rsaKeyValueEl = $doc->createElementNS(self::NS_DS, 'ds:RSAKeyValue');
-        $rsaKeyValueEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:Modulus', $modB64));
-        $rsaKeyValueEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:Exponent', $expB64));
-        $keyValueEl->appendChild($rsaKeyValueEl);
-        $keyInfoEl->appendChild($keyValueEl);
-
-        $x509DataEl = $doc->createElementNS(self::NS_DS, 'ds:X509Data');
-        $x509DataEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509Certificate', $certDerB64));
-        if ($subjectName !== '') {
-            $x509DataEl->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509SubjectName', $subjectName));
-        }
-        if ($issuerName !== '' && $serial !== '') {
-            $issuerSerial2El = $doc->createElementNS(self::NS_DS, 'ds:X509IssuerSerial');
-            $issuerSerial2El->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509IssuerName', $issuerName));
-            $issuerSerial2El->appendChild($doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial));
-            $x509DataEl->appendChild($issuerSerial2El);
-        }
-        $keyInfoEl->appendChild($x509DataEl);
 
         // Compute digests
         $senderC14n = self::c14n($senderDoc, true, []);
