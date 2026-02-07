@@ -142,9 +142,8 @@ final class DivEnvelopeSigner
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
-        $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties:QualifyingProperties');
-        // Match the Java/Python shape: declare both a prefix and default namespace to XAdES.
-        $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:QualifyingProperties', self::NS_XADES);
+        // Keep XAdES in the default namespace (avoid introducing an unused prefix into SignedInfo's namespace context).
+        $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties');
         $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
         $qpEl->setAttribute('Target', '#' . $signatureId);
         $qpEl->setAttribute('Id', 'ds-QualifyingProperties');
@@ -179,12 +178,6 @@ final class DivEnvelopeSigner
         $issuerSerialEl->appendChild($issuerNameEl);
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
-
-        // Keep canonicalization stable: inclusive C14N for SignedInfo is sensitive to in-scope namespaces.
-        // Some libxml2 DOM operations may add unused xmlns:* declarations on the DIV Envelope root.
-        // Remove them so we match the minimal namespace context used by the working Python/Java clients.
-        $divEnvelope->removeAttributeNS('http://www.w3.org/2000/xmlns/', 'QualifyingProperties');
-        $divEnvelope->removeAttributeNS('http://www.w3.org/2000/xmlns/', 'ds');
 
         // Compute digests
         $senderC14n = self::c14n($senderDoc, true, []);
