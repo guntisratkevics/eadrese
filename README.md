@@ -91,7 +91,8 @@ cfg = EAddressConfig(
 
 ## PHP (early stage)
 An experimental PHP client lives under `php/`. It currently contains scaffolding for configuration,
-envelope building, and crypto utilities. SOAP/WSSE signing is not yet complete.
+envelope building, crypto utilities, and a sidecar HTTP client (send/list/confirm via the Java sidecar API).
+Direct SOAP/WSSE signing is not yet complete.
 
 ## Testing
 ```bash

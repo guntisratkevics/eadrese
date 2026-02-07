@@ -7,6 +7,7 @@ It focuses on configuration and envelope construction. SOAP/WSSE signing is not 
 - Envelope builder (SenderDocument + attachments metadata).
 - AES-GCM payload encryption helper (outbound placeholder).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
+- Sidecar HTTP client for send/list/confirm (uses the Java sidecar API).
 - SOAP transport and WS-Security signing are not implemented.
 
 ## Usage (building envelope)
@@ -40,6 +41,20 @@ $attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
     encryptionKeyB64: $encKeyB64,
     recipientThumbprintB64: $thumbB64,
     symmetricKeyBytes: $symKey
+);
+```
+
+## Usage (sidecar HTTP client)
+```php
+use LatvianEinvoice\\SidecarClient;
+
+$client = new SidecarClient('http://127.0.0.1:18080');
+$result = $client->sendTextMessage(
+    connectionId: 'P40103166694_01',
+    recipient: '_GATIS@90001733697',
+    subject: 'PHP smoke test',
+    body: 'Hello from PHP',
+    unsigned: false
 );
 ```
 
