@@ -75,7 +75,8 @@ final class DivEnvelopeSigner
         $sigEl->appendChild($signedInfoEl);
 
         $canonEl = $doc->createElementNS(self::NS_DS, 'ds:CanonicalizationMethod');
-        $canonEl->setAttribute('Algorithm', 'http://www.w3.org/TR/2001/REC-xml-c14n-20010315');
+        // Use exclusive C14N for SignedInfo to avoid signature fragility from in-scope unused namespaces (SOAP/XAdES).
+        $canonEl->setAttribute('Algorithm', self::NS_EXC_C14N);
         $signedInfoEl->appendChild($canonEl);
 
         $sigMethodEl = $doc->createElementNS(self::NS_DS, 'ds:SignatureMethod');
@@ -199,8 +200,8 @@ final class DivEnvelopeSigner
         $spC14n = self::c14n($spEl, true, ['ds']);
         $dvSp->nodeValue = base64_encode(hash('sha512', $spC14n, true));
 
-        // Sign SignedInfo (inclusive C14N)
-        $siC14n = self::c14n($signedInfoEl, false, []);
+        // Sign SignedInfo (exclusive C14N)
+        $siC14n = self::c14n($signedInfoEl, true, ['ds']);
         $sigRaw = '';
         $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA512);
         if (!$ok) {
