@@ -148,28 +148,28 @@ final class DivEnvelopeSigner
         $xadesDoc->formatOutput = false;
         $xadesDoc->preserveWhiteSpace = false;
 
-        $qpX = $xadesDoc->createElementNS(self::NS_XADES, 'QualifyingProperties');
+        $qpX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:QualifyingProperties');
         $xadesDoc->appendChild($qpX);
-        $qpX->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
+        $qpX->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:xades', self::NS_XADES);
         $qpX->setAttribute('Target', '#' . $signatureId);
         $qpX->setAttribute('Id', 'ds-QualifyingProperties');
 
-        $spX = $xadesDoc->createElementNS(self::NS_XADES, $signedPropsTag);
+        $spX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:' . $signedPropsTag);
         $spX->setAttribute('Id', $signedPropsId);
         $qpX->appendChild($spX);
 
-        $sspX = $xadesDoc->createElementNS(self::NS_XADES, 'SignedSignatureProperties');
+        $sspX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:SignedSignatureProperties');
         $spX->appendChild($sspX);
 
-        $signingTimeEl = $xadesDoc->createElementNS(self::NS_XADES, 'SigningTime', gmdate('Y-m-d\\TH:i:sP'));
+        $signingTimeEl = $xadesDoc->createElementNS(self::NS_XADES, 'xades:SigningTime', gmdate('Y-m-d\\TH:i:sP'));
         $sspX->appendChild($signingTimeEl);
 
-        $scX = $xadesDoc->createElementNS(self::NS_XADES, 'SigningCertificate');
+        $scX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:SigningCertificate');
         $sspX->appendChild($scX);
-        $certX = $xadesDoc->createElementNS(self::NS_XADES, 'Cert');
+        $certX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:Cert');
         $scX->appendChild($certX);
 
-        $certDigestX = $xadesDoc->createElementNS(self::NS_XADES, 'CertDigest');
+        $certDigestX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:CertDigest');
         $certX->appendChild($certDigestX);
         $dmSha1 = $xadesDoc->createElementNS(self::NS_DS, 'ds:DigestMethod');
         $dmSha1->setAttribute('Algorithm', 'http://www.w3.org/2000/09/xmldsig#sha1');
@@ -177,7 +177,7 @@ final class DivEnvelopeSigner
         $dvSha1 = $xadesDoc->createElementNS(self::NS_DS, 'ds:DigestValue', $certSha1B64);
         $certDigestX->appendChild($dvSha1);
 
-        $issuerSerialX = $xadesDoc->createElementNS(self::NS_XADES, 'IssuerSerial');
+        $issuerSerialX = $xadesDoc->createElementNS(self::NS_XADES, 'xades:IssuerSerial');
         $certX->appendChild($issuerSerialX);
         $issuerNameEl = $xadesDoc->createElementNS(self::NS_DS, 'ds:X509IssuerName', $issuerName);
         $issuerSerialX->appendChild($issuerNameEl);
