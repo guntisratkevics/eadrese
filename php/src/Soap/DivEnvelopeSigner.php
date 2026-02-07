@@ -142,42 +142,54 @@ final class DivEnvelopeSigner
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
-        // Keep XAdES in the default namespace (avoid introducing an unused prefix into SignedInfo's namespace context).
-        $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties');
-        $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
-        $qpEl->setAttribute('Target', '#' . $signatureId);
-        $qpEl->setAttribute('Id', 'ds-QualifyingProperties');
+        // Build XAdES subtree in a separate DOM to keep namespace declarations local (avoid hoisting to DIV Envelope root).
+        $xadesDoc = new \DOMDocument('1.0', 'utf-8');
+        $xadesDoc->formatOutput = false;
+        $xadesDoc->preserveWhiteSpace = false;
+
+        $qpX = $xadesDoc->createElementNS(self::NS_XADES, 'QualifyingProperties');
+        $xadesDoc->appendChild($qpX);
+        $qpX->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
+        $qpX->setAttribute('Target', '#' . $signatureId);
+        $qpX->setAttribute('Id', 'ds-QualifyingProperties');
+
+        $spX = $xadesDoc->createElementNS(self::NS_XADES, $signedPropsTag);
+        $spX->setAttribute('Id', $signedPropsId);
+        $qpX->appendChild($spX);
+
+        $sspX = $xadesDoc->createElementNS(self::NS_XADES, 'SignedSignatureProperties');
+        $spX->appendChild($sspX);
+
+        $signingTimeEl = $xadesDoc->createElementNS(self::NS_XADES, 'SigningTime', gmdate('Y-m-d\\TH:i:sP'));
+        $sspX->appendChild($signingTimeEl);
+
+        $scX = $xadesDoc->createElementNS(self::NS_XADES, 'SigningCertificate');
+        $sspX->appendChild($scX);
+        $certX = $xadesDoc->createElementNS(self::NS_XADES, 'Cert');
+        $scX->appendChild($certX);
+
+        $certDigestX = $xadesDoc->createElementNS(self::NS_XADES, 'CertDigest');
+        $certX->appendChild($certDigestX);
+        $dmSha1 = $xadesDoc->createElementNS(self::NS_DS, 'ds:DigestMethod');
+        $dmSha1->setAttribute('Algorithm', 'http://www.w3.org/2000/09/xmldsig#sha1');
+        $certDigestX->appendChild($dmSha1);
+        $dvSha1 = $xadesDoc->createElementNS(self::NS_DS, 'ds:DigestValue', $certSha1B64);
+        $certDigestX->appendChild($dvSha1);
+
+        $issuerSerialX = $xadesDoc->createElementNS(self::NS_XADES, 'IssuerSerial');
+        $certX->appendChild($issuerSerialX);
+        $issuerNameEl = $xadesDoc->createElementNS(self::NS_DS, 'ds:X509IssuerName', $issuerName);
+        $issuerSerialX->appendChild($issuerNameEl);
+        $serialEl = $xadesDoc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
+        $issuerSerialX->appendChild($serialEl);
+
+        $qpEl = $doc->importNode($qpX, true);
         $objEl->appendChild($qpEl);
 
-        $spEl = $doc->createElementNS(self::NS_XADES, $signedPropsTag);
-        $spEl->setAttribute('Id', $signedPropsId);
-        $qpEl->appendChild($spEl);
-
-        $sspEl = $doc->createElementNS(self::NS_XADES, 'SignedSignatureProperties');
-        $spEl->appendChild($sspEl);
-
-        $signingTimeEl = $doc->createElementNS(self::NS_XADES, 'SigningTime', gmdate('Y-m-d\\TH:i:sP'));
-        $sspEl->appendChild($signingTimeEl);
-
-        $scEl = $doc->createElementNS(self::NS_XADES, 'SigningCertificate');
-        $sspEl->appendChild($scEl);
-        $certEl = $doc->createElementNS(self::NS_XADES, 'Cert');
-        $scEl->appendChild($certEl);
-
-        $certDigestEl = $doc->createElementNS(self::NS_XADES, 'CertDigest');
-        $certEl->appendChild($certDigestEl);
-        $dmSha1 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
-        $dmSha1->setAttribute('Algorithm', 'http://www.w3.org/2000/09/xmldsig#sha1');
-        $certDigestEl->appendChild($dmSha1);
-        $dvSha1 = $doc->createElementNS(self::NS_DS, 'ds:DigestValue', $certSha1B64);
-        $certDigestEl->appendChild($dvSha1);
-
-        $issuerSerialEl = $doc->createElementNS(self::NS_XADES, 'IssuerSerial');
-        $certEl->appendChild($issuerSerialEl);
-        $issuerNameEl = $doc->createElementNS(self::NS_DS, 'ds:X509IssuerName', $issuerName);
-        $issuerSerialEl->appendChild($issuerNameEl);
-        $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
-        $issuerSerialEl->appendChild($serialEl);
+        $spEl = self::findElementById($qpEl, $signedPropsId);
+        if (!$spEl instanceof \DOMElement) {
+            throw new \RuntimeException('Failed to locate imported SignedProperties');
+        }
 
         // Compute digests
         $senderC14n = self::c14n($senderDoc, true, []);
@@ -201,6 +213,19 @@ final class DivEnvelopeSigner
     {
         foreach ($parent->childNodes as $child) {
             if ($child instanceof \DOMElement && $child->localName === $localName) {
+                return $child;
+            }
+        }
+        return null;
+    }
+
+    private static function findElementById(\DOMElement $root, string $id): ?\DOMElement
+    {
+        if ($root->getAttribute('Id') === $id) {
+            return $root;
+        }
+        foreach ($root->getElementsByTagName('*') as $child) {
+            if ($child instanceof \DOMElement && $child->getAttribute('Id') === $id) {
                 return $child;
             }
         }
