@@ -187,6 +187,9 @@ final class DivEnvelopeSigner
         $qpEl = $doc->importNode($qpX, true);
         $objEl->appendChild($qpEl);
 
+        // Keep XAdES namespace local to the ds:Object subtree (avoid polluting SignedInfo's in-scope namespaces).
+        $divEnvelope->removeAttributeNS('http://www.w3.org/2000/xmlns/', 'xades');
+
         $spEl = self::findElementById($qpEl, $signedPropsId);
         if (!$spEl instanceof \DOMElement) {
             throw new \RuntimeException('Failed to locate imported SignedProperties');
