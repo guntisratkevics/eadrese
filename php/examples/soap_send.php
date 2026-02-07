@@ -50,6 +50,7 @@ $result = $client->sendTextMessageSoap([$recipient], $subject, 'Hello from PHP S
 $out = [
     'status' => $result['status'] ?? null,
     'message_id' => $result['body']['MessageId'] ?? null,
+    'fault' => $result['body']['Fault'] ?? null,
     'local_sender_ref' => $result['message_id'] ?? null,
 ];
 echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;

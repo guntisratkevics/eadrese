@@ -114,7 +114,6 @@ final class WsseSigner
         $siC14n = self::c14n($signedInfoEl, true, ['wsse', $soapEnvPrefix]);
         $sigRaw = '';
         $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA1);
-        openssl_pkey_free($priv);
         if (!$ok) {
             throw new \RuntimeException('Failed to sign WSSE SignedInfo');
         }

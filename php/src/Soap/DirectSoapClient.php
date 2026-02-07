@@ -208,7 +208,25 @@ final class DirectSoapClient
         if ($nodes && $nodes->length > 0) {
             $messageId = trim((string)$nodes->item(0)->textContent);
         }
-        return $messageId ? ['MessageId' => $messageId] : null;
+        if ($messageId) {
+            return ['MessageId' => $messageId];
+        }
+
+        $fault = $xpath->query('//*[local-name()=\"Fault\"]');
+        if ($fault && $fault->length > 0 && $fault->item(0) instanceof \DOMElement) {
+            $faultEl = $fault->item(0);
+            $code = trim((string)$xpath->evaluate('string(.//*[local-name()=\"Code\"]/*[local-name()=\"Value\"][1])', $faultEl));
+            $reason = trim((string)$xpath->evaluate('string(.//*[local-name()=\"Reason\"]/*[local-name()=\"Text\"][1])', $faultEl));
+            $detail = trim((string)$xpath->evaluate('string(.//*[local-name()=\"Detail\"][1])', $faultEl));
+            return [
+                'Fault' => [
+                    'Code' => $code !== '' ? $code : null,
+                    'Reason' => $reason !== '' ? $reason : null,
+                    'Detail' => $detail !== '' ? $detail : null,
+                ],
+            ];
+        }
+
+        return null;
     }
 }
-
