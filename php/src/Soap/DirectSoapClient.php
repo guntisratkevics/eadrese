@@ -48,76 +48,84 @@ final class DirectSoapClient
         $sendInput = $doc->createElementNS(self::NS_UUI, 'SendMessageInput');
         $body->appendChild($sendInput);
 
-        $divEnv = $doc->createElementNS(self::NS_DIV, 'Envelope');
-        $sendInput->appendChild($divEnv);
-
         $messageId = bin2hex(random_bytes(16));
         $senderAddr = $this->cfg->defaultFrom;
 
-        $senderDoc = $doc->createElementNS(self::NS_DIV, 'SenderDocument');
+        // Build the DIV Envelope in a standalone DOM to avoid inheriting SOAP namespaces.
+        // DIV validates the extracted Envelope XML, so signature canonicalization must match a standalone document.
+        $divDoc = new \DOMDocument('1.0', 'utf-8');
+        $divDoc->formatOutput = false;
+        $divDoc->preserveWhiteSpace = false;
+
+        $divEnv = $divDoc->createElementNS(self::NS_DIV, 'Envelope');
+        $divDoc->appendChild($divEnv);
+
+        $senderDoc = $divDoc->createElementNS(self::NS_DIV, 'SenderDocument');
         $senderDoc->setAttribute('Id', 'SenderSection');
         $divEnv->appendChild($senderDoc);
 
-        $docMeta = $doc->createElementNS(self::NS_DIV, 'DocumentMetadata');
+        $docMeta = $divDoc->createElementNS(self::NS_DIV, 'DocumentMetadata');
         $senderDoc->appendChild($docMeta);
-        $general = $doc->createElementNS(self::NS_DIV, 'GeneralMetadata');
+        $general = $divDoc->createElementNS(self::NS_DIV, 'GeneralMetadata');
         $docMeta->appendChild($general);
 
-        $authors = $doc->createElementNS(self::NS_DIV, 'Authors');
-        $authorEntry = $doc->createElementNS(self::NS_DIV, 'AuthorEntry');
-        $institution = $doc->createElementNS(self::NS_DIV, 'Institution');
-        $title = $doc->createElementNS(self::NS_DIV, 'Title', $senderAddr);
+        $authors = $divDoc->createElementNS(self::NS_DIV, 'Authors');
+        $authorEntry = $divDoc->createElementNS(self::NS_DIV, 'AuthorEntry');
+        $institution = $divDoc->createElementNS(self::NS_DIV, 'Institution');
+        $title = $divDoc->createElementNS(self::NS_DIV, 'Title', $senderAddr);
         $institution->appendChild($title);
         $authorEntry->appendChild($institution);
         $authors->appendChild($authorEntry);
         $general->appendChild($authors);
 
         $now = new \DateTimeImmutable('now', new \DateTimeZone('Europe/Riga'));
-        $general->appendChild($doc->createElementNS(self::NS_DIV, 'Date', $now->format('Y-m-d')));
+        $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Date', $now->format('Y-m-d')));
 
-        $docKind = $doc->createElementNS(self::NS_DIV, 'DocumentKind');
-        $docKind->appendChild($doc->createElementNS(self::NS_DIV, 'DocumentKindCode', $documentKindCode));
-        $docKind->appendChild($doc->createElementNS(self::NS_DIV, 'DocumentKindVersion', '1.0'));
+        $docKind = $divDoc->createElementNS(self::NS_DIV, 'DocumentKind');
+        $docKind->appendChild($divDoc->createElementNS(self::NS_DIV, 'DocumentKindCode', $documentKindCode));
+        $docKind->appendChild($divDoc->createElementNS(self::NS_DIV, 'DocumentKindVersion', '1.0'));
         if ($documentKindCode !== 'DOC_EMPTY') {
-            $docKind->appendChild($doc->createElementNS(self::NS_DIV, 'DocumentKindName', $documentKindCode));
+            $docKind->appendChild($divDoc->createElementNS(self::NS_DIV, 'DocumentKindName', $documentKindCode));
         }
         $general->appendChild($docKind);
 
-        $general->appendChild($doc->createElementNS(self::NS_DIV, 'Description', $bodyText));
-        $general->appendChild($doc->createElementNS(self::NS_DIV, 'Title', $subject));
+        $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Description', $bodyText));
+        $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Title', $subject));
 
-        $senderTransport = $doc->createElementNS(self::NS_DIV, 'SenderTransportMetadata');
-        $senderTransport->appendChild($doc->createElementNS(self::NS_DIV, 'SenderE-Address', $senderAddr));
-        $senderTransport->appendChild($doc->createElementNS(self::NS_DIV, 'SenderRefNumber', $messageId));
+        $senderTransport = $divDoc->createElementNS(self::NS_DIV, 'SenderTransportMetadata');
+        $senderTransport->appendChild($divDoc->createElementNS(self::NS_DIV, 'SenderE-Address', $senderAddr));
+        $senderTransport->appendChild($divDoc->createElementNS(self::NS_DIV, 'SenderRefNumber', $messageId));
 
-        $recipientsEl = $doc->createElementNS(self::NS_DIV, 'Recipients');
+        $recipientsEl = $divDoc->createElementNS(self::NS_DIV, 'Recipients');
         foreach ($recipients as $recipient) {
-            $entry = $doc->createElementNS(self::NS_DIV, 'RecipientEntry');
-            $entry->appendChild($doc->createElementNS(self::NS_DIV, 'RecipientE-Address', $recipient));
+            $entry = $divDoc->createElementNS(self::NS_DIV, 'RecipientEntry');
+            $entry->appendChild($divDoc->createElementNS(self::NS_DIV, 'RecipientE-Address', $recipient));
             $recipientsEl->appendChild($entry);
         }
         $senderTransport->appendChild($recipientsEl);
 
         $senderTransport->appendChild(
-            $doc->createElementNS(self::NS_DIV, 'NotifySenderOnDelivery', $notifySenderOnDelivery ? 'true' : 'false')
+            $divDoc->createElementNS(self::NS_DIV, 'NotifySenderOnDelivery', $notifySenderOnDelivery ? 'true' : 'false')
         );
-        $senderTransport->appendChild($doc->createElementNS(self::NS_DIV, 'Priority', 'normal'));
+        $senderTransport->appendChild($divDoc->createElementNS(self::NS_DIV, 'Priority', 'normal'));
 
         if ($traceText) {
-            $trace = $doc->createElementNS(self::NS_DIV, 'TraceInfo');
-            $traceEntry = $doc->createElementNS(self::NS_DIV, 'TraceInfoEntry');
-            $traceEntry->appendChild($doc->createElementNS(self::NS_DIV, 'TraceInfoID', 'Trace1'));
-            $traceEntry->appendChild($doc->createElementNS(self::NS_DIV, 'TraceText', substr($traceText, 0, 50)));
+            $trace = $divDoc->createElementNS(self::NS_DIV, 'TraceInfo');
+            $traceEntry = $divDoc->createElementNS(self::NS_DIV, 'TraceInfoEntry');
+            $traceEntry->appendChild($divDoc->createElementNS(self::NS_DIV, 'TraceInfoID', 'Trace1'));
+            $traceEntry->appendChild($divDoc->createElementNS(self::NS_DIV, 'TraceText', substr($traceText, 0, 50)));
             $trace->appendChild($traceEntry);
             $senderTransport->appendChild($trace);
         }
 
         $senderDoc->appendChild($senderTransport);
 
-        $divEnv->appendChild($doc->createElementNS(self::NS_DIV, 'Signatures'));
+        $divEnv->appendChild($divDoc->createElementNS(self::NS_DIV, 'Signatures'));
 
-        // Sign the DIV envelope first, then apply WSSE (matches Python sidecar flow).
-        DivEnvelopeSigner::signEnvelope($doc, $divEnv, $this->cfg);
+        // Sign the DIV envelope first, then import into SOAP and apply WSSE.
+        DivEnvelopeSigner::signEnvelope($divDoc, $divEnv, $this->cfg);
+
+        $sendInput->appendChild($doc->importNode($divEnv, true));
         WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_SEND_MESSAGE);
 
         $requestXml = $doc->saveXML();
