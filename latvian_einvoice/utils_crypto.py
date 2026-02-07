@@ -4,8 +4,9 @@ import ssl
 from pathlib import Path
 from typing import Optional, Tuple
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes, serialization, padding as sym_padding
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -26,7 +27,7 @@ def thumbprint_sha1_b64(cert_pem: bytes) -> str:
 def encrypt_key_for_recipient(cert_pem: bytes, key_bytes: bytes) -> str:
     cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
     public_key = cert.public_key()
-    encrypted = public_key.encrypt(key_bytes, padding.PKCS1v15())
+    encrypted = public_key.encrypt(key_bytes, asym_padding.PKCS1v15())
     return base64.b64encode(encrypted).decode("ascii")
 
 
@@ -60,12 +61,32 @@ def encrypt_payload_aes_gcm(key: bytes, plaintext: bytes, aad: bytes = b"") -> T
 
 def decrypt_key_with_private(private_key_pem: bytes, enc_key_b64: str) -> bytes:
     private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
-    return private_key.decrypt(base64.b64decode(enc_key_b64), padding.PKCS1v15())
+    return private_key.decrypt(base64.b64decode(enc_key_b64), asym_padding.PKCS1v15())
+
+
+def decrypt_key_with_private_oaep_sha1(private_key_pem: bytes, enc_key_b64: str) -> bytes:
+    private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
+    return private_key.decrypt(
+        base64.b64decode(enc_key_b64),
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
 
 
 def decrypt_payload_aes_gcm(key: bytes, iv: bytes, ciphertext_with_tag: bytes, aad: bytes = b"") -> bytes:
     aesgcm = AESGCM(key)
     return aesgcm.decrypt(iv, ciphertext_with_tag, aad)
+
+
+def decrypt_payload_aes_cbc_pkcs5(key: bytes, iv: bytes, ciphertext: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    padded = decryptor.update(ciphertext) + decryptor.finalize()
+    unpadder = sym_padding.PKCS7(128).unpadder()
+    return unpadder.update(padded) + unpadder.finalize()
 
 
 # Optional OCSP validation (best-effort)

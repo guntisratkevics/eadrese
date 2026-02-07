@@ -19,7 +19,8 @@ VRAA operational notes (from support replies)
 - Signs SenderDocument with XMLDSig + XAdES-BES (RSA-SHA512, SHA-512 digests; XAdES v1.3.2 SignedProperties).
 - Adds WS-Security signature to the SOAP header (RSA-SHA1/SHA1) with Timestamp + To, matching the Java profile.
 - Supports mTLS client auth; OAuth2 client-credentials token is optional when required by the environment.
-- Optional attachment encryption (AES-GCM) with per-recipient EncryptionInfo.
+- Optional outbound attachment encryption (AES-GCM placeholder) with per-recipient EncryptionInfo.
+- Inbound attachment decryption for DIV AES-CBC + RSA-OAEP (SHA1) key wrapping with optional GZIP decompression.
 - Optional VID subaddress auto-add for EINVOICE.
 
 ## How it works (high level)
@@ -87,6 +88,10 @@ cfg = EAddressConfig(
 ## Documentation
 - docs/python-client-spec.md
 - docs/security.md
+
+## PHP (early stage)
+An experimental PHP client lives under `php/`. It currently contains scaffolding for configuration,
+envelope building, and crypto utilities. SOAP/WSSE signing is not yet complete.
 
 ## Testing
 ```bash

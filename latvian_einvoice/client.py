@@ -73,6 +73,8 @@ class EAddressClient:
             self.token_provider,
             self.soap_client,
             include_attachments,
+            private_key_path=self.cfg.private_key,
+            certificate_path=self.cfg.certificate,
             auto_confirm=False,
         )
 

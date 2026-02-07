@@ -2,6 +2,13 @@ import pytest
 
 pytest.importorskip("xmlsec")
 
+import datetime as dt
+from datetime import timezone
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+
 from latvian_einvoice import (
     Attachment,
     EAddressClient,
@@ -59,7 +66,7 @@ class StubService:
         self.calls.append({"method": "GetNextMessage", "token": Token, "include_attachments": IncludeAttachments})
         return {"MessageId": "msg-1", "Subject": "Test"}
 
-    def ConfirmMessage(self, Token, MessageId):
+    def ConfirmMessage(self, Token=None, MessageId=None, RecipientConfirmationPart=None, **_kwargs):
         self.calls.append({"method": "ConfirmMessage", "token": Token, "message_id": MessageId})
         return None
 
@@ -67,6 +74,36 @@ class StubService:
         self.calls.append({"method": "SearchAddresseeUnit", "token": Token, "registration_number": RegistrationNumber})
         return {"Addressee": [{"Name": "Tester", "RegNr": RegistrationNumber}]}
 
+def _self_signed(tmpdir):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "LV"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test Org"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "test.example"),
+        ]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(dt.datetime.now(timezone.utc) - dt.timedelta(days=1))
+        .not_valid_after(dt.datetime.now(timezone.utc) + dt.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    kf = tmpdir / "key.pem"
+    cf = tmpdir / "cert.pem"
+    kf.write_bytes(key_pem)
+    cf.write_bytes(cert_pem)
+    return kf, cf
 
 def test_eadrese_send_message_uses_stub_service():
     session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
@@ -85,7 +122,7 @@ def test_eadrese_send_message_uses_stub_service():
     assert payload_files[0]["Name"] == "sample.xml"
 
 
-def test_eadrese_receive_confirm_search():
+def test_eadrese_receive_confirm_search(tmp_path):
     # 3 token calls: get_next_message, confirm_message, search_addressee
     session = DummySession([
         ({"access_token": "token123", "expires_in": 120}, 200),
@@ -93,7 +130,14 @@ def test_eadrese_receive_confirm_search():
         ({"access_token": "token123", "expires_in": 120}, 200),
     ])
     svc = StubService()
-    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    key_file, cert_file = _self_signed(tmp_path)
+    cfg = EAddressConfig(
+        client_id="cid",
+        client_secret="secret",
+        verify_ssl=False,
+        certificate=cert_file,
+        private_key=key_file,
+    )
     client = EAddressClient(cfg, session=session, service=svc)
 
     # 1. Get next message

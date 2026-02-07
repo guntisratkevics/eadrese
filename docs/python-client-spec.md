@@ -44,6 +44,9 @@ Typical endpoints (adjust for TEST/PROD):
 - GetNextMessage retrieves messages (with optional attachments).
 - ConfirmMessage acknowledges the message and removes it from the queue.
 - Optional decryption for attachments when EncryptionInfo and private key are provided.
+- DIV inbound encryption (per Java/.NET clients):
+  - RSA-OAEP (SHA1) decrypt of `EncryptionInfo.Key` yields `[key_len][aes_key][iv]`.
+  - AES-CBC/PKCS5 for content bytes; optional GZIP decompression when `File.Compressed=true`.
 
 ## 7. Configuration
 Key parameters in `EAddressConfig`:

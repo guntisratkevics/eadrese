@@ -417,10 +417,20 @@ class SignOnlySignature(Signature):
         sign_node = envelope.find(".//{http://www.w3.org/2000/09/xmldsig#}Signature")
         if sign_node is None:
             return envelope
+
+        def _register_ids(ctx):
+            try:
+                for node in envelope.xpath("//*[@wsu:Id]", namespaces={"wsu": ns.WSU}):
+                    ctx.register_id(node, "Id", ns.WSU)
+                for node in envelope.xpath("//*[@Id]"):
+                    ctx.register_id(node, "Id")
+            except Exception:
+                return
         if self._response_cert_path:
             ctx = xmlsec.SignatureContext()
             fmt_cert = getattr(xmlsec.constants, "KeyDataFormatCertPem", xmlsec.constants.KeyDataFormatPem)
             ctx.key = xmlsec.Key.from_file(self._response_cert_path, fmt_cert)
+            _register_ids(ctx)
             ctx.verify(sign_node)
         elif self._trust_store_path:
             manager = xmlsec.KeysManager()
@@ -430,6 +440,7 @@ class SignOnlySignature(Signature):
                 xmlsec.constants.KeyDataTypeTrusted,
             )
             ctx = xmlsec.SignatureContext(manager)
+            _register_ids(ctx)
             ctx.verify(sign_node)
 
         # Optional OCSP validation (best-effort)
