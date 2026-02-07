@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LatvianEinvoice;
 
 use LatvianEinvoice\Envelope\Builder;
+use LatvianEinvoice\Soap\DirectSoapClient;
 
 final class Client
 {
@@ -73,6 +74,27 @@ final class Client
             ]);
         }
         return new \SoapClient($this->config->wsdlUrl, $options);
+    }
+
+    /**
+     * Direct SOAP SendMessage (mTLS + WSSE + SenderDocument signature).
+     *
+     * @param string[] $recipients
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
+     */
+    public function sendTextMessageSoap(
+        array $recipients,
+        string $subject,
+        string $bodyText = '',
+        string $documentKindCode = 'DOC_EMPTY'
+    ): array {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->sendTextMessage(
+            $recipients,
+            $subject,
+            $bodyText,
+            $documentKindCode
+        );
     }
 
     public function sendMessage(): void

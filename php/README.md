@@ -1,7 +1,7 @@
 # PHP client (experimental)
 
 This directory contains an early-stage PHP client for Latvia's e-Address (DIV / VUS).
-It focuses on configuration and envelope construction. SOAP/WSSE signing is not finished yet.
+It focuses on configuration, envelope construction, and experimental direct SOAP SendMessage signing (WSSE + SenderDocument).
 
 ## Status
 - Envelope builder (SenderDocument + attachments metadata).
@@ -9,7 +9,8 @@ It focuses on configuration and envelope construction. SOAP/WSSE signing is not 
 - OAEP+AES-CBC outbound helper (DIV-aligned mode).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
 - Sidecar HTTP client for send/list/confirm (uses the Java sidecar API).
-- SOAP transport and WS-Security signing are not implemented.
+- Direct SOAP SendMessage (mTLS + WSSE + SenderDocument signature) is implemented for DOC_EMPTY text messages (experimental).
+- SOAP receive/confirm flows are not implemented.
 
 ## Usage (building envelope)
 ```php
@@ -51,7 +52,7 @@ $attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
 
 ## Usage (sidecar HTTP client)
 ```php
-use LatvianEinvoice\\SidecarClient;
+use LatvianEinvoice\SidecarClient;
 
 $client = new SidecarClient('http://127.0.0.1:18080');
 $result = $client->sendTextMessage(
@@ -66,6 +67,23 @@ $result = $client->sendTextMessage(
 Example script (reads env vars: `DIV_SIDECAR_URL`, `DIV_CONNECTION_ID`, `DIV_RECIPIENT`):
 ```bash
 php examples/sidecar_send.php
+```
+
+## Usage (direct SOAP SendMessage)
+Requires mTLS files (`DIV_CLIENT_CERT`, `DIV_CLIENT_KEY`) and signing files (`DIV_SIGN_CERT`, `DIV_SIGN_KEY`).
+By default, the example uses TEST WSDL and `DIV_VERIFY_SSL=0`.
+
+```bash
+composer install
+DIV_WSDL_URL='https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl' \
+DIV_CLIENT_CERT='/path/to/client.crt.pem' \
+DIV_CLIENT_KEY='/path/to/client.key.pem' \
+DIV_SIGN_CERT='/path/to/client.crt.pem' \
+DIV_SIGN_KEY='/path/to/client.key.pem' \
+DIV_SENDER='_PRIVATE@<REG_NO>' \
+DIV_RECIPIENT='_PRIVATE@<RECIPIENT_REG_NO>' \
+DIV_VERIFY_SSL=0 \
+php examples/soap_send.php
 ```
 
 Running via Docker on a host that exposes the sidecar on `127.0.0.1`:
