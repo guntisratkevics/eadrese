@@ -67,6 +67,8 @@ final class DivEnvelopeSigner
 
         $sigEl = $doc->createElementNS(self::NS_DS, 'ds:Signature');
         $sigEl->setAttribute('Id', $signatureId);
+        // Keep ds namespace local to the Signature subtree (avoid polluting the DIV Envelope root).
+        $sigEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:ds', self::NS_DS);
         $signaturesEl->appendChild($sigEl);
 
         $signedInfoEl = $doc->createElementNS(self::NS_DS, 'ds:SignedInfo');
@@ -177,6 +179,12 @@ final class DivEnvelopeSigner
         $issuerSerialEl->appendChild($issuerNameEl);
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
+
+        // Keep canonicalization stable: inclusive C14N for SignedInfo is sensitive to in-scope namespaces.
+        // Some libxml2 DOM operations may add unused xmlns:* declarations on the DIV Envelope root.
+        // Remove them so we match the minimal namespace context used by the working Python/Java clients.
+        $divEnvelope->removeAttributeNS('http://www.w3.org/2000/xmlns/', 'QualifyingProperties');
+        $divEnvelope->removeAttributeNS('http://www.w3.org/2000/xmlns/', 'ds');
 
         // Compute digests
         $senderC14n = self::c14n($senderDoc, true, []);
