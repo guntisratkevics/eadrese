@@ -125,7 +125,15 @@ final class DirectSoapClient
         // Sign the DIV envelope first, then import into SOAP and apply WSSE.
         DivEnvelopeSigner::signEnvelope($divDoc, $divEnv, $this->cfg);
 
-        $sendInput->appendChild($doc->importNode($divEnv, true));
+        $divXml = $divDoc->saveXML($divEnv);
+        if ($divXml === false) {
+            throw new \RuntimeException('Failed to serialize DIV Envelope');
+        }
+        $frag = $doc->createDocumentFragment();
+        if ($frag === false || !$frag->appendXML($divXml)) {
+            throw new \RuntimeException('Failed to import DIV Envelope into SOAP document');
+        }
+        $sendInput->appendChild($frag);
         WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_SEND_MESSAGE);
 
         $requestXml = $doc->saveXML();
