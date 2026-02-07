@@ -196,7 +196,6 @@ final class WsseSigner
 
     private static function b64NoNl(string $bytes): string
     {
-        return str_replace([\"\\r\", \"\\n\"], '', base64_encode($bytes));
+        return str_replace(["\r", "\n"], '', base64_encode($bytes));
     }
 }
-

@@ -190,7 +190,6 @@ final class DivEnvelopeSigner
         $siC14n = self::c14n($signedInfoEl, false, []);
         $sigRaw = '';
         $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA512);
-        openssl_pkey_free($priv);
         if (!$ok) {
             throw new \RuntimeException('Failed to sign DIV SignedInfo');
         }
@@ -212,7 +211,9 @@ final class DivEnvelopeSigner
      */
     private static function c14n(\DOMElement $el, bool $exclusive, array $inclusivePrefixes): string
     {
-        $c14n = $el->C14N($exclusive, false, null, $inclusivePrefixes);
+        // DOMNode::C14N only accepts InclusiveNamespace prefixes in exclusive mode (and emits notices otherwise).
+        $prefixes = !empty($inclusivePrefixes) ? $inclusivePrefixes : null;
+        $c14n = $el->C14N($exclusive, false, null, $prefixes);
         if ($c14n === false) {
             throw new \RuntimeException('C14N failed');
         }
