@@ -6,6 +6,7 @@ namespace LatvianEinvoice;
 
 use LatvianEinvoice\Envelope\Builder;
 use LatvianEinvoice\Soap\DirectSoapClient;
+use LatvianEinvoice\Soap\DivMessageDecoder;
 
 final class Client
 {
@@ -95,6 +96,71 @@ final class Client
             $bodyText,
             $documentKindCode
         );
+    }
+
+    /**
+     * Direct SOAP GetMessageList.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getMessageListSoap(int $maxResultCount = 10, ?int $addresseeUnitId = null): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getMessageList($maxResultCount, $addresseeUnitId);
+    }
+
+    /**
+     * Direct SOAP GetMessage.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getMessageSoap(string $messageId): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getMessage($messageId);
+    }
+
+    /**
+     * Direct SOAP ConfirmMessage.
+     *
+     * @param string[]|null $recipientEaddresses
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function confirmMessageSoap(
+        string $messageId,
+        string $status = 'RecipientAccepted',
+        ?string $statusCode = null,
+        ?string $statusReason = null,
+        ?array $recipientEaddresses = null
+    ): array {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->confirmMessage($messageId, $status, $statusCode, $statusReason, $recipientEaddresses);
+    }
+
+    /**
+     * Direct SOAP GetMessage + optional attachment section stitching + decrypt/decompress.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getMessageDecodedSoap(
+        string $messageId,
+        bool $stitchSections = true,
+        bool $decrypt = true
+    ): array {
+        $soap = new DirectSoapClient($this->config);
+        $result = $soap->getMessage($messageId);
+        $body = is_array($result['body'] ?? null) ? $result['body'] : null;
+        if (!$body || isset($body['Fault'])) {
+            return $result;
+        }
+        if ($stitchSections) {
+            DivMessageDecoder::stitchAttachmentSections($soap, $messageId, $body);
+        }
+        if ($decrypt) {
+            DivMessageDecoder::decryptAttachments($body, $this->config);
+        }
+        $result['body'] = $body;
+        return $result;
     }
 
     public function sendMessage(): void

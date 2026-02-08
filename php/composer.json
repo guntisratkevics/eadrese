@@ -8,11 +8,19 @@
     "ext-openssl": "*",
     "ext-soap": "*",
     "ext-json": "*",
-    "ext-curl": "*"
+    "ext-curl": "*",
+    "ext-dom": "*",
+    "ext-xsl": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
   },
   "autoload": {
     "psr-4": {
       "LatvianEinvoice\\": "src/"
     }
+  },
+  "scripts": {
+    "test": "phpunit"
   }
 }

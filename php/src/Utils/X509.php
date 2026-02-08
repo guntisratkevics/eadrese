@@ -92,7 +92,10 @@ final class X509
             $value = $dn[$key];
             $used[$key] = true;
             if (is_array($value)) {
-                foreach ($value as $v) {
+                // Approximate RFC4514 ordering (most OpenSSL decoders don't preserve full RDN order).
+                // In practice DIV expects DC values in reverse order vs openssl_x509_parse output.
+                $vals = array_reverse(array_values($value));
+                foreach ($vals as $v) {
                     if ($v === null || $v === '') {
                         continue;
                     }
@@ -115,7 +118,8 @@ final class X509
                 continue;
             }
             if (is_array($value)) {
-                foreach ($value as $v) {
+                $vals = array_reverse(array_values($value));
+                foreach ($vals as $v) {
                     if ($v === null || $v === '') {
                         continue;
                     }
@@ -132,4 +136,3 @@ final class X509
         return implode(', ', $parts);
     }
 }
-

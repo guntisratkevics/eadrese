@@ -6,6 +6,7 @@ namespace LatvianEinvoice\Soap;
 
 use LatvianEinvoice\Config;
 use LatvianEinvoice\Utils\Uuid;
+use LatvianEinvoice\Utils\X509;
 
 final class WsseSigner
 {
@@ -24,6 +25,12 @@ final class WsseSigner
         string $actionUrl
     ): void {
         $soapEnvPrefix = $soapHeader->prefix ?: 'soap-env';
+        if (($soapHeader->prefix === null || $soapHeader->prefix === '') && !$soapHeader->hasAttributeNS('http://www.w3.org/2000/xmlns/', $soapEnvPrefix)) {
+            // Header/Body elements may be unprefixed (SOAP namespace as default namespace).
+            // For SOAP attributes like mustUnderstand we still need a prefix, but keep it scoped to the Header subtree
+            // so it doesn't affect DIV signature canonicalization in the Body.
+            $soapHeader->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:' . $soapEnvPrefix, self::NS_SOAP);
+        }
 
         $actionEl = $doc->createElementNS(self::NS_WSA, 'wsa:Action', $actionUrl);
         $actionEl->setAttributeNS(self::NS_SOAP, $soapEnvPrefix . ':mustUnderstand', 'true');
@@ -57,7 +64,8 @@ final class WsseSigner
             throw new \RuntimeException('Failed to read certificate: ' . $cfg->certificatePath);
         }
         $bstId = 'BST-' . Uuid::v4();
-        $bstEl = $doc->createElementNS(self::NS_WSSE, 'wsse:BinarySecurityToken', self::b64NoNl($certBytes));
+        // WSSE BinarySecurityToken expects the DER-encoded certificate (base64), not the PEM text bytes.
+        $bstEl = $doc->createElementNS(self::NS_WSSE, 'wsse:BinarySecurityToken', X509::certDerB64($certBytes));
         $bstEl->setAttributeNS(self::NS_WSU, 'wsu:Id', $bstId);
         $bstEl->setAttribute('ValueType', 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3');
         $bstEl->setAttribute('EncodingType', 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary');

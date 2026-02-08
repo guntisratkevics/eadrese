@@ -73,7 +73,7 @@ final class Crypto
     {
         $cipher = self::cipherForKey(strlen($key), 'cbc');
         $pt = self::pkcs7Pad($plaintext, 16);
-        $ct = openssl_encrypt($pt, $cipher, $key, OPENSSL_RAW_DATA, $iv);
+        $ct = openssl_encrypt($pt, $cipher, $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING, $iv);
         if ($ct === false) {
             throw new \RuntimeException('Failed to encrypt payload');
         }
@@ -91,43 +91,101 @@ final class Crypto
         if (!$ok || $raw === null || $raw === '') {
             throw new \RuntimeException('Failed to decrypt DIV key');
         }
-        if (strlen($raw) < 4) {
+        // Java/.NET DIV key blob format: 1-byte key length + key bytes + 16-byte IV.
+        if (strlen($raw) < 1 + 16 + 16) {
             throw new \RuntimeException('Invalid key blob size');
         }
-        $keyLen = unpack('N', substr($raw, 0, 4))[1];
+        $keyLen = ord($raw[0]);
         if (!in_array($keyLen, [16, 24, 32], true)) {
             throw new \RuntimeException('Unexpected AES key length');
         }
-        if (strlen($raw) < 4 + $keyLen + 16) {
+        if (strlen($raw) < 1 + $keyLen + 16) {
             throw new \RuntimeException('Invalid key blob size');
         }
-        $key = substr($raw, 4, $keyLen);
-        $iv = substr($raw, 4 + $keyLen);
+        $key = substr($raw, 1, $keyLen);
+        $iv = substr($raw, 1 + $keyLen, 16);
         if (strlen($iv) !== 16) {
             throw new \RuntimeException('Invalid IV length');
         }
         return [$key, $iv];
     }
 
-    public static function decryptPayloadAesCbc(string $key, string $iv, string $ciphertext): string
+    public static function decryptKeyPkcs1v15(string $privateKeyPem, string $encKeyB64): string
     {
-        $cipher = self::cipherForKey(strlen($key), 'cbc');
-        $pt = openssl_decrypt($ciphertext, $cipher, $key, OPENSSL_RAW_DATA, $iv);
+        $priv = openssl_pkey_get_private($privateKeyPem);
+        if ($priv === false) {
+            throw new \RuntimeException('Invalid private key PEM');
+        }
+        $enc = base64_decode($encKeyB64, true);
+        if ($enc === false) {
+            throw new \RuntimeException('Invalid base64 encrypted key');
+        }
+        $ok = openssl_private_decrypt($enc, $raw, $priv, OPENSSL_PKCS1_PADDING);
+        if (!$ok || $raw === null) {
+            throw new \RuntimeException('Failed to decrypt key (PKCS1v15)');
+        }
+        return (string)$raw;
+    }
+
+    public static function decryptPayloadAesGcm(string $key, string $iv, string $ciphertextWithTag, string $aad = ''): string
+    {
+        if (strlen($ciphertextWithTag) < 16) {
+            throw new \RuntimeException('Ciphertext is too short (missing GCM tag)');
+        }
+        $tag = substr($ciphertextWithTag, -16);
+        $ct = substr($ciphertextWithTag, 0, -16);
+        $cipher = self::cipherForKey(strlen($key), 'gcm');
+        $pt = openssl_decrypt($ct, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag, $aad);
         if ($pt === false) {
             throw new \RuntimeException('Failed to decrypt payload');
         }
         return $pt;
     }
 
+    public static function decryptPayloadAesCbc(string $key, string $iv, string $ciphertext): string
+    {
+        $cipher = self::cipherForKey(strlen($key), 'cbc');
+        $pt = openssl_decrypt($ciphertext, $cipher, $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING, $iv);
+        if ($pt === false) {
+            throw new \RuntimeException('Failed to decrypt payload');
+        }
+        return self::pkcs7Unpad($pt, 16);
+    }
+
     private static function buildDivKeyBlob(string $key, string $iv): string
     {
-        return pack('N', strlen($key)) . $key . $iv;
+        if (!in_array(strlen($key), [16, 24, 32], true)) {
+            throw new \RuntimeException('Unsupported AES key length');
+        }
+        if (strlen($iv) !== 16) {
+            throw new \RuntimeException('Invalid IV length');
+        }
+        return chr(strlen($key)) . $key . $iv;
     }
 
     private static function pkcs7Pad(string $data, int $blockSize): string
     {
         $pad = $blockSize - (strlen($data) % $blockSize);
         return $data . str_repeat(chr($pad), $pad);
+    }
+
+    private static function pkcs7Unpad(string $data, int $blockSize): string
+    {
+        $len = strlen($data);
+        if ($len === 0 || ($len % $blockSize) !== 0) {
+            throw new \RuntimeException('Invalid padded data length');
+        }
+        $pad = ord($data[$len - 1]);
+        if ($pad <= 0 || $pad > $blockSize) {
+            throw new \RuntimeException('Invalid PKCS7 padding');
+        }
+        // Validate padding bytes.
+        for ($i = 0; $i < $pad; $i++) {
+            if (ord($data[$len - 1 - $i]) !== $pad) {
+                throw new \RuntimeException('Invalid PKCS7 padding');
+            }
+        }
+        return substr($data, 0, $len - $pad);
     }
 
     private static function cipherForKey(int $keyLen, string $mode): string
