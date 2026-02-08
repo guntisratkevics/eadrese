@@ -119,7 +119,16 @@ def decrypt_payload_aes_cbc_pkcs5(key: bytes, iv: bytes, ciphertext: bytes) -> b
 
 
 def build_div_key_blob(key: bytes, iv: bytes) -> bytes:
-    return len(key).to_bytes(4, "big") + key + iv
+    """
+    DIV Java/.NET key blob format for RSA-OAEP(SHA1)+AES-CBC payload encryption.
+
+    Format: 1-byte key length (16/24/32) + AES key bytes + 16-byte IV.
+    """
+    if not key or len(key) not in (16, 24, 32):
+        raise ValueError("Invalid AES key length for DIV key blob")
+    if not iv or len(iv) != 16:
+        raise ValueError("Invalid IV length for DIV key blob")
+    return bytes([len(key)]) + key + iv
 
 
 def _decode_modexp(value: str) -> int:

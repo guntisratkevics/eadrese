@@ -2,6 +2,7 @@ import base64
 import os
 import datetime as dt
 from datetime import timezone
+import gzip
 from cryptography.hazmat.primitives import hashes, serialization, padding as sym_padding
 from cryptography.hazmat.primitives.asymmetric import rsa, padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -10,6 +11,7 @@ from cryptography.x509.oid import NameOID
 
 from latvian_einvoice.api import receive
 from latvian_einvoice.utils_crypto import (
+    encrypt_payload_aes_cbc_pkcs5,
     encrypt_payload_aes_gcm,
     derive_encryption_fields,
     thumbprint_sha1_b64,
@@ -206,3 +208,180 @@ def test_get_next_message_decrypts_div_aes_cbc(tmp_path, monkeypatch):
     decrypted = result["AttachmentsOutput"]["AttachmentOutput"][0]["DecryptedContent"]
     assert decrypted == b"cbc-secret"
     assert confirm_calls == ["msg-456"]
+
+
+def test_get_message_list_parses_headers():
+    class Svc:
+        def __init__(self):
+            self.calls = []
+
+        def GetMessageList(self, MaxResultCount=None):
+            self.calls.append({"MaxResultCount": MaxResultCount})
+            return {
+                "MessageHeaders": {
+                    "MessageHeader": [
+                        {"MessageId": "m1", "SenderEAddress": "S1"},
+                        {"MessageId": "m2", "SenderEAddress": "S2"},
+                    ]
+                },
+                "HasMoreData": False,
+            }
+
+    svc = Svc()
+    client = DummySoapClient(svc)
+    headers = receive.get_message_list(None, client, max_result_count=2)
+    assert [h["MessageId"] for h in headers] == ["m1", "m2"]
+    assert svc.calls == [{"MaxResultCount": 2}]
+
+
+def test_get_next_message_falls_back_to_get_message_list_and_get_message():
+    class Svc:
+        def __init__(self):
+            self.calls = []
+
+        def GetMessageList(self, MaxResultCount=None):
+            self.calls.append(("GetMessageList", MaxResultCount))
+            return {"MessageHeaders": {"MessageHeader": {"MessageId": "msg-1"}}}
+
+        # Intentionally no IncludeAttachments argument to exercise TypeError fallback.
+        def GetMessage(self, MessageId=None):
+            self.calls.append(("GetMessage", MessageId))
+            return {"Envelope": {"SenderDocument": {"SenderTransportMetadata": {"Recipients": {"RecipientEntry": []}}}}}
+
+    svc = Svc()
+    client = DummySoapClient(svc)
+    result = receive.get_next_message(
+        None,
+        client,
+        include_attachments=False,
+        auto_confirm=False,
+    )
+    assert result["MessageId"] == "msg-1"
+    assert svc.calls == [("GetMessageList", 1), ("GetMessage", "msg-1")]
+
+
+def test_get_message_attaches_separate_attachment_sections():
+    chunk0 = b"AAA"
+    chunk1 = b"BBB"
+
+    class Svc:
+        def __init__(self):
+            self.section_calls = []
+
+        # Intentionally no IncludeAttachments argument to exercise TypeError fallback.
+        def GetMessage(self, MessageId=None):
+            return {
+                "Envelope": {"SenderDocument": {"SenderTransportMetadata": {"Recipients": {"RecipientEntry": []}}}},
+                "AttachmentsOutput": {
+                    "AttachmentOutput": [
+                        {
+                            "ContentId": "0",
+                            "IsSeparateCall": True,
+                            "SectionCount": 2,
+                        }
+                    ]
+                },
+            }
+
+        def GetAttachmentSection(self, MessageId=None, ContentId=None, SectionIndex=None):
+            self.section_calls.append((MessageId, ContentId, SectionIndex))
+            part = chunk0 if int(SectionIndex) == 0 else chunk1
+            return {"Contents": base64.b64encode(part).decode("ascii")}
+
+    svc = Svc()
+    client = DummySoapClient(svc)
+    result = receive.get_message(
+        None,
+        client,
+        message_id="msg-999",
+        include_attachments=True,
+        auto_confirm=False,
+    )
+
+    contents_b64 = result["AttachmentsOutput"]["AttachmentOutput"][0]["Contents"]
+    assert base64.b64decode(contents_b64) == chunk0 + chunk1
+    assert svc.section_calls == [("msg-999", "0", 0), ("msg-999", "0", 1)]
+
+
+def test_get_message_decrypts_compressed_div_aes_cbc(tmp_path):
+    cert_pem, key_pem = _self_signed_cert()
+    cert_file = tmp_path / "cert.pem"
+    cert_file.write_bytes(cert_pem)
+    key_file = tmp_path / "priv.pem"
+    key_file.write_bytes(key_pem)
+
+    aes_key = b"\x11" * 32
+    iv = b"\x22" * 16
+    plaintext = b"hello-compressed"
+    gz = gzip.compress(plaintext)
+    ciphertext = encrypt_payload_aes_cbc_pkcs5(aes_key, iv, gz)
+
+    key_blob = bytes([len(aes_key)]) + aes_key + iv
+    cert = x509.load_pem_x509_certificate(cert_pem)
+    encrypted_key = cert.public_key().encrypt(
+        key_blob,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    enc_key_b64 = base64.b64encode(encrypted_key).decode("ascii")
+    thumb_b64 = thumbprint_sha1_b64(cert_pem)
+
+    class Svc:
+        # Intentionally no IncludeAttachments argument to exercise TypeError fallback.
+        def GetMessage(self, MessageId=None):
+            return {
+                "Envelope": {
+                    "SenderDocument": {
+                        "DocumentMetadata": {
+                            "PayloadReference": {
+                                "File": [
+                                    {
+                                        "Name": "payload.txt",
+                                        "Content": {"ContentReference": "0"},
+                                        "Compressed": True,
+                                    }
+                                ]
+                            }
+                        },
+                        "SenderTransportMetadata": {
+                            "Recipients": {
+                                "RecipientEntry": [
+                                    {
+                                        "EncryptionInfo": {
+                                            "Key": enc_key_b64,
+                                            "CertificateThumbprint": thumb_b64,
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                },
+                "AttachmentsOutput": {
+                    "AttachmentOutput": [
+                        {
+                            "ContentId": "0",
+                            "Contents": base64.b64encode(ciphertext).decode("ascii"),
+                        }
+                    ]
+                },
+            }
+
+    svc = Svc()
+    client = DummySoapClient(svc)
+    result = receive.get_message(
+        None,
+        client,
+        message_id="msg-777",
+        include_attachments=True,
+        private_key_path=key_file,
+        certificate_path=cert_file,
+        auto_confirm=False,
+    )
+    att = result["AttachmentsOutput"]["AttachmentOutput"][0]
+    assert att["Name"] == "payload.txt"
+    assert att["DecryptedContent"] == plaintext
+

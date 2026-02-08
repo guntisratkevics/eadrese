@@ -12,7 +12,9 @@ from latvian_einvoice.utils_crypto import (
     decrypt_payload_aes_gcm,
     derive_encryption_fields,
     decrypt_key_with_private,
+    decrypt_key_with_private_oaep_sha1,
 )
+from latvian_einvoice.api import receive
 from latvian_einvoice.soap.envelope import build_envelope
 from latvian_einvoice.attachments import Attachment
 
@@ -55,7 +57,9 @@ def test_encrypt_payload_roundtrip():
 
 def test_derive_encryption_fields_and_decrypt():
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem, key_bytes=b"1" * 32)
+    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(
+        recipient_cert_pem=cert_pem, key_bytes=b"1" * 32
+    )
     # Encrypted key can be decrypted with private key
     decrypted = decrypt_key_with_private(key_pem, enc_key_b64)
     assert decrypted == b"1" * 32
@@ -64,6 +68,22 @@ def test_derive_encryption_fields_and_decrypt():
     der = cert.public_bytes(serialization.Encoding.DER)
     sha1 = hashlib.sha1(der).digest()
     assert thumb_b64 == base64.b64encode(sha1).decode("ascii")
+
+
+def test_derive_encryption_fields_oaep_cbc_key_blob_roundtrip():
+    cert_pem, key_pem = _self_signed_cert()
+    enc_key_b64, thumb_b64, sym_key, iv = derive_encryption_fields(
+        recipient_cert_pem=cert_pem,
+        key_bytes=b"\x01" * 32,
+        iv_bytes=b"\x02" * 16,
+        mode="oaep_cbc",
+    )
+    assert sym_key == b"\x01" * 32
+    assert iv == b"\x02" * 16
+    # Encrypted key blob can be OAEP-decrypted and parsed to the original key+IV.
+    key_blob = decrypt_key_with_private_oaep_sha1(key_pem, enc_key_b64)
+    parsed = receive._parse_div_encrypted_key(key_blob)
+    assert parsed == (b"\x01" * 32, b"\x02" * 16)
 
 
 def test_build_envelope_with_encryption_populates_ciphertext():
@@ -94,3 +114,4 @@ def test_build_envelope_with_encryption_populates_ciphertext():
     digest_b64 = file_entry["Content"]["DigestValue"]
     ct = base64.b64decode(ai["CipherText"])
     assert digest_b64 == base64.b64encode(hashlib.sha512(ct).digest()).decode("ascii")
+

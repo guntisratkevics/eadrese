@@ -9,16 +9,25 @@ def search_addressee(
     soap_client: SoapClient,
     registration_number: str
 ) -> List[Mapping[str, Any]]:
-    """Search for an addressee by registration number."""
+    """Search for an addressee by registration number / personal code."""
     token = token_provider.get_token() if token_provider else None
     svc = soap_client.service
     
     try:
         if hasattr(svc, "SearchAddresseeUnit"):
-            if token:
-                response = svc.SearchAddresseeUnit(Token=token, RegistrationNumber=registration_number)
-            else:
-                response = svc.SearchAddresseeUnit(RegistrationNumber=registration_number)
+            # Primary: UnifiedServiceInterface schema (Owner.Code search)
+            payload = {"AddresseeUnitOwner": {"Code": registration_number}}
+            try:
+                if token:
+                    response = svc.SearchAddresseeUnit(Token=token, **payload)
+                else:
+                    response = svc.SearchAddresseeUnit(**payload)
+            except TypeError:
+                # Fallback: some stubs/older clients used RegistrationNumber
+                if token:
+                    response = svc.SearchAddresseeUnit(Token=token, RegistrationNumber=registration_number)
+                else:
+                    response = svc.SearchAddresseeUnit(RegistrationNumber=registration_number)
         else:
             raise EAddressSoapError("Service has no SearchAddresseeUnit method")
     except Exception as exc:
@@ -27,11 +36,16 @@ def search_addressee(
     data = serialize_object(response)
     if not data:
         return []
-        
-    results = data.get("Addressee", [])
+
+    # UnifiedServiceInterface returns AddresseeUnits/AddresseeUnit; keep backward-compat for Addressee.
+    results = data.get("AddresseeUnits") or data.get("AddresseeUnit") or data.get("Addressee") or []
+    if isinstance(results, dict):
+        results = results.get("AddresseeUnit") or results.get("Addressee") or results
     if isinstance(results, dict):
         return [results]
-    return results
+    if isinstance(results, list):
+        return [r for r in results if isinstance(r, dict)]
+    return []
 
 
 def get_public_key_list(
@@ -63,5 +77,9 @@ def get_public_key_list(
     else:
         results = data.get("PublicKeys") or data.get("RecipientPublicKey") or []
     if isinstance(results, dict):
+        results = results.get("RecipientPublicKey") or results
+    if isinstance(results, dict):
         return [results]
-    return results
+    if isinstance(results, list):
+        return [r for r in results if isinstance(r, dict)]
+    return []

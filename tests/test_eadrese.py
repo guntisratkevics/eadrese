@@ -70,9 +70,21 @@ class StubService:
         self.calls.append({"method": "ConfirmMessage", "token": Token, "message_id": MessageId})
         return None
 
-    def SearchAddresseeUnit(self, Token, RegistrationNumber):
-        self.calls.append({"method": "SearchAddresseeUnit", "token": Token, "registration_number": RegistrationNumber})
-        return {"Addressee": [{"Name": "Tester", "RegNr": RegistrationNumber}]}
+    def SearchAddresseeUnit(self, Token=None, AddresseeUnitOwner=None, RegistrationNumber=None, **_kwargs):
+        code = None
+        if isinstance(AddresseeUnitOwner, dict):
+            code = AddresseeUnitOwner.get("Code")
+        if not code:
+            code = RegistrationNumber
+        self.calls.append(
+            {
+                "method": "SearchAddresseeUnit",
+                "token": Token,
+                "code": code,
+            }
+        )
+        return {"AddresseeUnits": {"AddresseeUnit": [{"Owner": {"Code": code}, "EAddress": "TEST_EADDR"}]}}
+
 
 def _self_signed(tmpdir):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -104,6 +116,7 @@ def _self_signed(tmpdir):
     kf.write_bytes(key_pem)
     cf.write_bytes(cert_pem)
     return kf, cf
+
 
 def test_eadrese_send_message_uses_stub_service():
     session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
@@ -153,9 +166,9 @@ def test_eadrese_receive_confirm_search(tmp_path):
     # 3. Search addressee
     results = client.search_addressee("4000123123")
     assert len(results) == 1
-    assert results[0]["Name"] == "Tester"
+    assert results[0]["Owner"]["Code"] == "4000123123"
     assert svc.calls[2]["method"] == "SearchAddresseeUnit"
-    assert svc.calls[2]["registration_number"] == "4000123123"
+    assert svc.calls[2]["code"] == "4000123123"
 
 
 def test_eadrese_vid_auto_logic():
@@ -166,22 +179,22 @@ def test_eadrese_vid_auto_logic():
     client = EAddressClient(cfg, session=session, service=svc)
 
     attachment = Attachment(filename="inv.xml", content=b"<inv/>", content_type="application/xml")
-    
-    # Send invoice to Client 
+
+    # Send invoice to Client
     # Should automatically append VID address as secondary recipient
     client.send_message("010101-11111", document_kind_code="EINVOICE", attachments=[attachment])
-    
+
     envelope = svc.calls[0]["envelope"]
     # Check recipients structure
     recipient_structs = envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"]
-    
+
     # We expect 2 recipients: Client + VID
     assert len(recipient_structs) == 2
     addrs = {r["RecipientE-Address"] for r in recipient_structs}
     assert "010101-11111" in addrs
-    assert "VID_EREKINI_PROD@90000069281" in addrs # Default PROD address since token url is standard
+    assert "VID_EREKINI_PROD@90000069281" in addrs  # Default PROD address since token url is standard
 
-    
+
 def test_eadrese_auth_error():
     # 401 response for token
     session = DummySession([({"error": "invalid_client"}, 401)])
@@ -192,8 +205,9 @@ def test_eadrese_auth_error():
     try:
         client.get_next_message()
     except EAddressAuthError:
-        pass # Expected
+        pass  # Expected
     except Exception as e:
         assert False, f"Raised wrong exception type: {type(e)}"
     else:
         assert False, "Should have raised EAddressAuthError"
+
