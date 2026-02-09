@@ -243,24 +243,42 @@ def _decrypt_attachments(
     aes_iv = None
     gcm_key = None
 
-    for cand in candidates:
-        try:
-            decrypted_key = decrypt_key_with_private_oaep_sha1(priv_pem, cand["key"])
-        except Exception:
-            continue
-        parsed = _parse_div_encrypted_key(decrypted_key)
-        if parsed:
-            aes_key, aes_iv = parsed
-            break
+    # Strategy:
+    # 1. Try OAEP.
+    #    a) Check for DIV Blob ([len][key][iv]). If found, use it (aes_key+aes_iv).
+    #    b) Check for Raw Key (16/24/32 bytes). If valid, keep as candidate (gcm_key).
+    # 2. If no DIV Blob found yet, Try PKCS1v15.
+    #    a) Check for DIV Blob. If found, use it.
+    #    b) Check for Raw Key. If valid, keep as candidate (if no gcm_key yet).
 
+    for cand in candidates:
+        # Try OAEP
+        try:
+            raw = decrypt_key_with_private_oaep_sha1(priv_pem, cand["key"])
+            parsed = _parse_div_encrypted_key(raw)
+            if parsed:
+                aes_key, aes_iv = parsed
+                break # Found definitive blob
+            
+            if len(raw) in (16, 24, 32) and gcm_key is None:
+                gcm_key = raw
+        except Exception:
+            pass
+    
     if aes_key is None:
+        # Try PKCS1v15
         for cand in candidates:
             try:
-                gcm_key = decrypt_key_with_private(priv_pem, cand["key"])
-                if gcm_key:
-                    break
+                raw = decrypt_key_with_private(priv_pem, cand["key"])
+                parsed = _parse_div_encrypted_key(raw)
+                if parsed:
+                    aes_key, aes_iv = parsed
+                    break # Found definitive blob
+                
+                if len(raw) in (16, 24, 32) and gcm_key is None:
+                    gcm_key = raw
             except Exception:
-                continue
+                pass
 
     file_map = _payload_file_map(data)
     attachments = data["AttachmentsOutput"].get("AttachmentOutput", [])
