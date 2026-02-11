@@ -9,6 +9,10 @@ Status / caveats
 - Cryptographic and protocol details are still being validated against the official clients.
 - Response signature and OCSP validation are best-effort.
 
+## Support / Donate (Overall)
+If this SDK helps your work and you want to support further development:
+- https://revolut.me/guntisha2j
+
 VRAA operational notes (from support replies)
 - For EINVOICE, the VID subaddress is mandatory; add it manually or enable automatic VID recipient insertion.
 - Test environment message retrieval window is 2 days; replies are sent to the sender e-address.
@@ -98,3 +102,9 @@ Direct SOAP/WSSE signing is not yet complete.
 ```bash
 pytest
 ```
+
+### Support Python Development
+- https://revolut.me/guntisha2j
+
+### Support PHP Development
+- https://revolut.me/guntisha2j
