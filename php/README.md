@@ -8,7 +8,6 @@ It focuses on configuration, envelope construction, and experimental direct SOAP
 - AES-GCM payload encryption helper (outbound placeholder).
 - OAEP+AES-CBC outbound helper (DIV-aligned mode).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
-- Sidecar HTTP client for send/list/confirm (uses the Java sidecar API).
 - Direct SOAP `SendMessage` (mTLS + WSSE + SenderDocument signature) is implemented and validated from STAGE.
 - Direct SOAP `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage` are implemented.
 - Decoder helpers for attachment section stitching + decrypt/decompress are implemented.
@@ -61,25 +60,6 @@ $attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
 );
 ```
 
-## Usage (sidecar HTTP client)
-```php
-use LatvianEinvoice\SidecarClient;
-
-$client = new SidecarClient('http://127.0.0.1:18080');
-$result = $client->sendTextMessage(
-    connectionId: 'P<REG_NO>_01',
-    recipient: '_PRIVATE@<RECIPIENT_REG_NO>',
-    subject: 'PHP smoke test',
-    body: 'Hello from PHP',
-    unsigned: false
-);
-```
-
-Example script (reads env vars: `DIV_SIDECAR_URL`, `DIV_CONNECTION_ID`, `DIV_RECIPIENT`):
-```bash
-php examples/sidecar_send.php
-```
-
 ## Usage (direct SOAP SendMessage)
 Requires mTLS files (`DIV_CLIENT_CERT`, `DIV_CLIENT_KEY`) and signing files (`DIV_SIGN_CERT`, `DIV_SIGN_KEY`).
 By default, the example uses TEST WSDL and `DIV_VERIFY_SSL=0`.
@@ -97,9 +77,9 @@ DIV_VERIFY_SSL=0 \
 php examples/soap_send.php
 ```
 
-Running via Docker on a host that exposes the sidecar on `127.0.0.1`:
+Running via Docker:
 ```bash
-sudo docker run --rm --network host -v /path/to/php:/app -w /app php:8.2-cli php examples/sidecar_send.php
+sudo docker run --rm --network host -v /path/to/php:/app -w /app php:8.2-cli php examples/soap_send.php
 ```
 
 ## Composer

@@ -106,7 +106,7 @@ cfg = EAddressConfig(
 
 ## PHP (early stage)
 An experimental PHP client lives under `php/`.
-It includes both sidecar HTTP usage and direct SOAP (mTLS + WSSE + DIV signing) flows.
+It focuses on direct SOAP (mTLS + WSSE + DIV signing) flows and no longer includes the Java sidecar-dependent variant.
 Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage`
 are implemented, but receive/decrypt/confirm still needs full end-to-end validation with real inbound attachment messages.
 
