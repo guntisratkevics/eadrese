@@ -7,6 +7,12 @@ from ..attachments import Attachment
 from ..utils import tz_riga
 from ..utils_crypto import encrypt_payload_aes_gcm, encrypt_payload_aes_cbc_pkcs5
 
+def _normalize_mime_type(content_type: str | None, encrypted: bool) -> str:
+    mime = (content_type or "").strip() or "application/octet-stream"
+    if encrypted and mime.lower().startswith("text/"):
+        return "application/octet-stream"
+    return mime
+
 def build_envelope(
     sender_e_address: str,
     recipients_list: List[str],
@@ -76,7 +82,7 @@ def build_envelope(
         ).decode("ascii")
         files.append(
             {
-                "MimeType": att.content_type,
+                "MimeType": _normalize_mime_type(att.content_type, bool(symmetric_key_bytes)),
                 "Size": len(payload_bytes),
                 "Name": att.filename,
                 "Content": {

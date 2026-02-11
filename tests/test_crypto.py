@@ -111,7 +111,23 @@ def test_build_envelope_with_encryption_populates_ciphertext():
     assert "IV" in ai and "CipherText" in ai
     # DigestValue in File should match sha512 of ciphertext
     file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"][0]
+    assert file_entry["MimeType"] == "application/octet-stream"
     digest_b64 = file_entry["Content"]["DigestValue"]
     ct = base64.b64decode(ai["CipherText"])
     assert digest_b64 == base64.b64encode(hashlib.sha512(ct).digest()).decode("ascii")
 
+
+def test_build_envelope_keeps_text_plain_when_not_encrypted():
+    attachments = [Attachment(filename="a.txt", content=b"ABC", content_type="text/plain")]
+    envelope, attachments_input, _ = build_envelope(
+        sender_e_address="_DEFAULT@90000000000",
+        recipients_list=["0101"],
+        document_kind_code="DOC_EMPTY",
+        subject="Test",
+        body_text="Body",
+        attachments=attachments,
+    )
+
+    assert attachments_input is not None
+    file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"][0]
+    assert file_entry["MimeType"] == "text/plain"
