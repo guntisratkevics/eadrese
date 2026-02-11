@@ -9,6 +9,17 @@ Status / caveats
 - Cryptographic and protocol details are still being validated against the official clients.
 - Response signature and OCSP validation are best-effort.
 
+## Validation Status (as of 2026-02-11)
+Tested and working
+- Python crypto/envelope test suite (`tests/test_crypto.py`) passes.
+- Encrypted `text/*` MIME normalization is aligned in Python and PHP envelope builders (`application/octet-stream` for encrypted text attachments).
+- PHP direct SOAP `SendMessage` works from STAGE (HTTP 200, MessageId returned).
+- PHP direct SOAP `GetMessageList` works from STAGE (HTTP 200 response shape validated).
+
+Implemented but not yet validated end-to-end
+- Real inbound message retrieval with attachments (`GetMessage` + `GetAttachmentSection` + decode/decrypt) because the test inbox is currently empty.
+- `ConfirmMessage` against real inbound messages.
+
 ## Support / Donate (Overall)
 If this SDK helps your work and you want to support further development:
 - https://revolut.me/guntisha2j
@@ -94,9 +105,10 @@ cfg = EAddressConfig(
 - docs/security.md
 
 ## PHP (early stage)
-An experimental PHP client lives under `php/`. It currently contains scaffolding for configuration,
-envelope building, crypto utilities, and a sidecar HTTP client (send/list/confirm via the Java sidecar API).
-Direct SOAP/WSSE signing is not yet complete.
+An experimental PHP client lives under `php/`.
+It includes both sidecar HTTP usage and direct SOAP (mTLS + WSSE + DIV signing) flows.
+Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage`
+are implemented, but receive/decrypt/confirm still needs full end-to-end validation with real inbound attachment messages.
 
 ## Testing
 ```bash

@@ -9,8 +9,19 @@ It focuses on configuration, envelope construction, and experimental direct SOAP
 - OAEP+AES-CBC outbound helper (DIV-aligned mode).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
 - Sidecar HTTP client for send/list/confirm (uses the Java sidecar API).
-- Direct SOAP SendMessage (mTLS + WSSE + SenderDocument signature) is implemented for DOC_EMPTY text messages (experimental).
-- SOAP receive/confirm flows are not implemented.
+- Direct SOAP `SendMessage` (mTLS + WSSE + SenderDocument signature) is implemented and validated from STAGE.
+- Direct SOAP `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage` are implemented.
+- Decoder helpers for attachment section stitching + decrypt/decompress are implemented.
+
+## Validation Status (as of 2026-02-11)
+Tested and working
+- Direct SOAP `SendMessage` from STAGE (`php examples/soap_send.php`) returns HTTP 200 and MessageId.
+- Direct SOAP `GetMessageList` from STAGE (`php examples/soap_get_message_list.php`) returns HTTP 200.
+- MIME normalization for encrypted `text/*` attachments is applied in envelope builder.
+
+Implemented but not yet validated end-to-end
+- Full receive/decrypt flow against real inbound messages with attachments (test inbox currently empty).
+- `ConfirmMessage` against real inbound messages.
 
 ## Usage (building envelope)
 ```php
