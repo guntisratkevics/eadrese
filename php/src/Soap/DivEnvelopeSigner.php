@@ -226,7 +226,8 @@ final class DivEnvelopeSigner
         \DOMElement $combinedRoot,
         Config $cfg,
         string $signatureId,
-        array $signedSectionIds
+        array $signedSectionIds,
+        array $sectionDigestHints = []
     ): \DOMElement {
         if (!$cfg->certificatePath || !$cfg->privateKeyPath) {
             throw new \RuntimeException('DIV signing requires certificatePath and privateKeyPath');
@@ -256,10 +257,6 @@ final class DivEnvelopeSigner
         if (!$signaturesEl instanceof \DOMElement) {
             $signaturesEl = $doc->createElementNS(self::NS_DIV, 'Signatures');
             $combinedRoot->appendChild($signaturesEl);
-        } else {
-            while ($signaturesEl->firstChild) {
-                $signaturesEl->removeChild($signaturesEl->firstChild);
-            }
         }
 
         // Validate that all signed sections are present.
@@ -325,11 +322,6 @@ final class DivEnvelopeSigner
         $refSp = $doc->createElementNS(self::NS_DS, 'ds:Reference');
         $refSp->setAttribute('URI', '#' . $signedPropsId);
         $refSp->setAttribute('Type', 'http://uri.etsi.org/01903#SignedProperties');
-        $transformsSp = $doc->createElementNS(self::NS_DS, 'ds:Transforms');
-        $transformSp = $doc->createElementNS(self::NS_DS, 'ds:Transform');
-        $transformSp->setAttribute('Algorithm', self::NS_EXC_C14N);
-        $transformsSp->appendChild($transformSp);
-        $refSp->appendChild($transformsSp);
         $dm2 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
         $dm2->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmlenc#sha512');
         $refSp->appendChild($dm2);
@@ -371,9 +363,9 @@ final class DivEnvelopeSigner
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
-        $qpEl = $doc->createElementNS(self::NS_XADES, self::XADES_QP_PREFIX . ':QualifyingProperties');
-        $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:' . self::XADES_QP_PREFIX, self::NS_XADES);
-        $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
+        // Build XAdES subtree directly in the target document to avoid serializer-specific
+        // prefix rewrites across import/appendXML round-trips.
+        $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties');
         $qpEl->setAttribute('Target', '#' . $signatureId);
         $qpEl->setAttribute('Id', 'ds-QualifyingProperties');
         $objEl->appendChild($qpEl);
@@ -395,11 +387,11 @@ final class DivEnvelopeSigner
 
         $certDigestEl = $doc->createElementNS(self::NS_XADES, 'CertDigest');
         $certEl->appendChild($certDigestEl);
-        $dmSha1 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
-        $dmSha1->setAttribute('Algorithm', 'http://www.w3.org/2000/09/xmldsig#sha1');
-        $certDigestEl->appendChild($dmSha1);
-        $dvSha1 = $doc->createElementNS(self::NS_DS, 'ds:DigestValue', $certSha1B64);
-        $certDigestEl->appendChild($dvSha1);
+        $dmSha1El = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
+        $dmSha1El->setAttribute('Algorithm', 'http://www.w3.org/2000/09/xmldsig#sha1');
+        $certDigestEl->appendChild($dmSha1El);
+        $dvSha1El = $doc->createElementNS(self::NS_DS, 'ds:DigestValue', $certSha1B64);
+        $certDigestEl->appendChild($dvSha1El);
 
         $issuerSerialEl = $doc->createElementNS(self::NS_XADES, 'IssuerSerial');
         $certEl->appendChild($issuerSerialEl);
@@ -408,7 +400,9 @@ final class DivEnvelopeSigner
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
 
-        // Compute section digests (inclusive C14N).
+        // Compute section digests. Match Java confirm behavior: section digests resolve
+        // as exclusive C14N even though the advertised Transform is inclusive C14N.
+        // Sender/Server digests can be inherited from source envelope signatures.
         foreach ($signedSectionIds as $sectionId) {
             $sectionId = (string)$sectionId;
             if ($sectionId === '') {
@@ -418,13 +412,34 @@ final class DivEnvelopeSigner
             if (!$target instanceof \DOMElement) {
                 throw new \RuntimeException('Missing signed section: ' . $sectionId);
             }
-            $c14n = self::c14n($target, false, []);
-            $sectionDigestNodes[$sectionId]->nodeValue = base64_encode(hash('sha512', $c14n, true));
+            $c14n = self::c14n($target, true, []);
+            $computedDigest = base64_encode(hash('sha512', $c14n, true));
+
+            // Source-envelope digest hints are useful for parity checks, but can become stale if
+            // netify/context normalization changes canonical bytes. Prefer computed digest on mismatch.
+            $hintedDigest = trim((string)($sectionDigestHints[$sectionId] ?? ''));
+            $digest = ($hintedDigest !== '' && $hintedDigest === $computedDigest)
+                ? $hintedDigest
+                : $computedDigest;
+
+            $sectionDigestNodes[$sectionId]->nodeValue = self::wrapDigestText($digest);
         }
 
-        // Digest SignedProperties (exclusive C14N).
-        $spC14n = self::c14n($spEl, true, []);
-        $dvSp->nodeValue = base64_encode(hash('sha512', $spC14n, true));
+        // Match Java confirm profile: SignedProperties digest is exclusive C14N with ds prefix in scope.
+        $spC14n = self::c14n($spEl, true, ['ds']);
+        $dvSp->nodeValue = self::wrapDigestText(base64_encode(hash('sha512', $spC14n, true)));
+
+        // Java/Metro serializes long digest values with 76-char line wraps.
+        $xpath = new \DOMXPath($doc);
+        $xpath->registerNamespace('ds', self::NS_DS);
+        $digestNodes = $xpath->query('.//ds:DigestValue', $sigEl);
+        if ($digestNodes) {
+            foreach ($digestNodes as $digestNode) {
+                if ($digestNode instanceof \DOMElement) {
+                    $digestNode->nodeValue = self::wrapDigestText((string)$digestNode->nodeValue);
+                }
+            }
+        }
 
         // Sign SignedInfo (inclusive C14N).
         $siC14n = self::c14n($signedInfoEl, false, []);
@@ -436,6 +451,92 @@ final class DivEnvelopeSigner
         $sigValueEl->nodeValue = base64_encode($sigRaw);
 
         return $sigEl;
+    }
+
+    public static function resignSignatureValueInContext(
+        \DOMElement $signature,
+        Config $cfg,
+        bool $refreshAllReferences = true
+    ): void
+    {
+        if (!$cfg->privateKeyPath) {
+            throw new \RuntimeException('DIV signing requires privateKeyPath');
+        }
+
+        $keyPem = file_get_contents($cfg->privateKeyPath);
+        if ($keyPem === false) {
+            throw new \RuntimeException('Failed to read private key: ' . $cfg->privateKeyPath);
+        }
+        $priv = openssl_pkey_get_private($keyPem);
+        if ($priv === false) {
+            throw new \RuntimeException('Invalid private key PEM');
+        }
+
+        $signedInfo = self::firstChildByLocalName($signature, 'SignedInfo');
+        $sigValue = self::firstChildByLocalName($signature, 'SignatureValue');
+        if (!$signedInfo instanceof \DOMElement || !$sigValue instanceof \DOMElement) {
+            return;
+        }
+
+        self::refreshReferenceDigestsInContext($signature, !$refreshAllReferences);
+
+        $siC14n = self::c14n($signedInfo, false, []);
+        $sigRaw = '';
+        $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA512);
+        if (!$ok) {
+            throw new \RuntimeException('Failed to sign DIV SignedInfo');
+        }
+        $sigValue->nodeValue = base64_encode($sigRaw);
+    }
+
+    public static function refreshReferenceDigestsInContext(
+        \DOMElement $signature,
+        bool $signedPropertiesOnly = false
+    ): void
+    {
+        $doc = $signature->ownerDocument;
+        if (!$doc instanceof \DOMDocument || !$doc->documentElement instanceof \DOMElement) {
+            return;
+        }
+
+        $xpath = new \DOMXPath($doc);
+        $xpath->registerNamespace('ds', self::NS_DS);
+        $refs = $xpath->query('./ds:SignedInfo/ds:Reference', $signature);
+        if (!$refs) {
+            return;
+        }
+
+        foreach ($refs as $ref) {
+            if (!$ref instanceof \DOMElement) {
+                continue;
+            }
+            $uri = trim((string)$ref->getAttribute('URI'));
+            if (!str_starts_with($uri, '#')) {
+                continue;
+            }
+            $targetId = substr($uri, 1);
+            if (!is_string($targetId) || $targetId === '') {
+                continue;
+            }
+            $target = self::findElementById($doc->documentElement, $targetId);
+            if (!$target instanceof \DOMElement) {
+                continue;
+            }
+
+            $type = trim((string)$ref->getAttribute('Type'));
+            if ($signedPropertiesOnly && $type !== 'http://uri.etsi.org/01903#SignedProperties') {
+                continue;
+            }
+            $c14n = $type === 'http://uri.etsi.org/01903#SignedProperties'
+                ? self::c14n($target, true, ['ds'])
+                : self::c14n($target, true, []);
+            $digest = self::wrapDigestText(base64_encode(hash('sha512', $c14n, true)));
+
+            $dv = $xpath->query('./ds:DigestValue[1]', $ref)?->item(0);
+            if ($dv instanceof \DOMElement) {
+                $dv->nodeValue = $digest;
+            }
+        }
     }
 
     private static function firstChildByLocalName(\DOMElement $parent, string $localName): ?\DOMElement
@@ -473,5 +574,17 @@ final class DivEnvelopeSigner
             throw new \RuntimeException('C14N failed');
         }
         return $c14n;
+    }
+
+    private static function wrapDigestText(string $value): string
+    {
+        $text = trim($value);
+        if ($text === '' || str_contains($text, "\n")) {
+            return $text;
+        }
+        if (strlen($text) <= 76) {
+            return $text;
+        }
+        return implode("\n", str_split($text, 76));
     }
 }

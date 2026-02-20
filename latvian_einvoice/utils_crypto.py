@@ -88,15 +88,41 @@ def encrypt_payload_aes_cbc_pkcs5(key: bytes, iv: bytes, plaintext: bytes) -> by
     return encryptor.update(padded) + encryptor.finalize()
 
 
-def decrypt_key_with_private(private_key_pem: bytes, enc_key_b64: str) -> bytes:
+def _enc_key_input_to_bytes(enc_key: str | bytes | bytearray) -> bytes:
+    # Zeep may return xsd:base64Binary as raw bytes (already decoded) or as base64 text.
+    if isinstance(enc_key, str):
+        return base64.b64decode(enc_key)
+
+    raw = bytes(enc_key)
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return raw
+
+    if not text:
+        return b""
+
+    try:
+        return base64.b64decode(text, validate=True)
+    except Exception:
+        return raw
+
+
+def decrypt_key_with_private(
+    private_key_pem: bytes,
+    enc_key_b64: str | bytes | bytearray,
+) -> bytes:
     private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
-    return private_key.decrypt(base64.b64decode(enc_key_b64), asym_padding.PKCS1v15())
+    return private_key.decrypt(_enc_key_input_to_bytes(enc_key_b64), asym_padding.PKCS1v15())
 
 
-def decrypt_key_with_private_oaep_sha1(private_key_pem: bytes, enc_key_b64: str) -> bytes:
+def decrypt_key_with_private_oaep_sha1(
+    private_key_pem: bytes,
+    enc_key_b64: str | bytes | bytearray,
+) -> bytes:
     private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
     return private_key.decrypt(
-        base64.b64decode(enc_key_b64),
+        _enc_key_input_to_bytes(enc_key_b64),
         asym_padding.OAEP(
             mgf=asym_padding.MGF1(algorithm=hashes.SHA1()),
             algorithm=hashes.SHA1(),

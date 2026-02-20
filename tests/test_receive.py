@@ -166,24 +166,29 @@ def test_get_next_message_decrypts_div_aes_cbc(tmp_path, monkeypatch):
                         ]
                     }
                 },
-                "SenderTransportMetadata": {
-                    "Recipients": {
-                        "RecipientEntry": [
-                            {"EncryptionInfo": {"Key": enc_key_b64, "CertificateThumbprint": thumb_b64}}
-                        ]
+                        "SenderTransportMetadata": {
+                            "Recipients": {
+                                "RecipientEntry": [
+                                    {
+                                        "EncryptionInfo": {
+                                            "Key": base64.b64decode(enc_key_b64),
+                                            "CertificateThumbprint": thumb_b64,
+                                        }
+                                    }
+                                ]
+                            }
+                        },
                     }
                 },
+                "AttachmentsOutput": {
+                    "AttachmentOutput": [
+                        {
+                            "ContentId": "0",
+                            "Contents": ciphertext,
+                        }
+                    ]
+                },
             }
-        },
-        "AttachmentsOutput": {
-            "AttachmentOutput": [
-                {
-                    "ContentId": "0",
-                    "Contents": base64.b64encode(ciphertext).decode("ascii"),
-                }
-            ]
-        },
-    }
 
     confirm_calls = []
 
@@ -298,9 +303,55 @@ def test_get_message_attaches_separate_attachment_sections():
         auto_confirm=False,
     )
 
-    contents_b64 = result["AttachmentsOutput"]["AttachmentOutput"][0]["Contents"]
-    assert base64.b64decode(contents_b64) == chunk0 + chunk1
+    contents = result["AttachmentsOutput"]["AttachmentOutput"][0]["Contents"]
+    if isinstance(contents, str):
+        contents = base64.b64decode(contents)
+    assert contents == chunk0 + chunk1
     assert svc.section_calls == [("msg-999", "0", 0), ("msg-999", "0", 1)]
+
+
+def test_get_message_attaches_sections_when_service_returns_raw_base64binary():
+    chunk0 = b"AAA"
+    chunk1 = b"BBB"
+
+    class Svc:
+        def __init__(self):
+            self.section_calls = []
+
+        def GetMessage(self, MessageId=None):
+            return {
+                "Envelope": {"SenderDocument": {"SenderTransportMetadata": {"Recipients": {"RecipientEntry": []}}}},
+                "AttachmentsOutput": {
+                    "AttachmentOutput": [
+                        {
+                            "ContentId": "0",
+                            "IsSeparateCall": True,
+                            "SectionCount": 2,
+                        }
+                    ]
+                },
+            }
+
+        def GetAttachmentSection(self, MessageId=None, ContentId=None, SectionIndex=None):
+            self.section_calls.append((MessageId, ContentId, SectionIndex))
+            part = chunk0 if int(SectionIndex) == 0 else chunk1
+            return base64.b64encode(part).decode("ascii")
+
+    svc = Svc()
+    client = DummySoapClient(svc)
+    result = receive.get_message(
+        None,
+        client,
+        message_id="msg-1000",
+        include_attachments=True,
+        auto_confirm=False,
+    )
+
+    contents = result["AttachmentsOutput"]["AttachmentOutput"][0]["Contents"]
+    if isinstance(contents, str):
+        contents = base64.b64decode(contents)
+    assert contents == chunk0 + chunk1
+    assert svc.section_calls == [("msg-1000", "0", 0), ("msg-1000", "0", 1)]
 
 
 def test_get_message_decrypts_compressed_div_aes_cbc(tmp_path):
@@ -351,7 +402,7 @@ def test_get_message_decrypts_compressed_div_aes_cbc(tmp_path):
                                 "RecipientEntry": [
                                     {
                                         "EncryptionInfo": {
-                                            "Key": enc_key_b64,
+                                            "Key": base64.b64decode(enc_key_b64),
                                             "CertificateThumbprint": thumb_b64,
                                         }
                                     }
@@ -364,7 +415,7 @@ def test_get_message_decrypts_compressed_div_aes_cbc(tmp_path):
                     "AttachmentOutput": [
                         {
                             "ContentId": "0",
-                            "Contents": base64.b64encode(ciphertext).decode("ascii"),
+                            "Contents": ciphertext,
                         }
                     ]
                 },
@@ -384,4 +435,3 @@ def test_get_message_decrypts_compressed_div_aes_cbc(tmp_path):
     att = result["AttachmentsOutput"]["AttachmentOutput"][0]
     assert att["Name"] == "payload.txt"
     assert att["DecryptedContent"] == plaintext
-

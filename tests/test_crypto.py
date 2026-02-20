@@ -70,6 +70,16 @@ def test_derive_encryption_fields_and_decrypt():
     assert thumb_b64 == base64.b64encode(sha1).decode("ascii")
 
 
+def test_decrypt_key_accepts_raw_bytes_input():
+    cert_pem, key_pem = _self_signed_cert()
+    enc_key_b64, _thumb_b64, _sym_key, _iv = derive_encryption_fields(
+        recipient_cert_pem=cert_pem, key_bytes=b"1" * 32
+    )
+    enc_key_raw = base64.b64decode(enc_key_b64)
+    decrypted = decrypt_key_with_private(key_pem, enc_key_raw)
+    assert decrypted == b"1" * 32
+
+
 def test_derive_encryption_fields_oaep_cbc_key_blob_roundtrip():
     cert_pem, key_pem = _self_signed_cert()
     enc_key_b64, thumb_b64, sym_key, iv = derive_encryption_fields(
@@ -82,6 +92,20 @@ def test_derive_encryption_fields_oaep_cbc_key_blob_roundtrip():
     assert iv == b"\x02" * 16
     # Encrypted key blob can be OAEP-decrypted and parsed to the original key+IV.
     key_blob = decrypt_key_with_private_oaep_sha1(key_pem, enc_key_b64)
+    parsed = receive._parse_div_encrypted_key(key_blob)
+    assert parsed == (b"\x01" * 32, b"\x02" * 16)
+
+
+def test_oaep_decrypt_key_accepts_raw_bytes_input():
+    cert_pem, key_pem = _self_signed_cert()
+    enc_key_b64, _thumb_b64, _sym_key, _iv = derive_encryption_fields(
+        recipient_cert_pem=cert_pem,
+        key_bytes=b"\x01" * 32,
+        iv_bytes=b"\x02" * 16,
+        mode="oaep_cbc",
+    )
+    enc_key_raw = base64.b64decode(enc_key_b64)
+    key_blob = decrypt_key_with_private_oaep_sha1(key_pem, enc_key_raw)
     parsed = receive._parse_div_encrypted_key(key_blob)
     assert parsed == (b"\x01" * 32, b"\x02" * 16)
 

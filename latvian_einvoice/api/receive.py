@@ -127,12 +127,13 @@ def _attach_sections(
                     section = svc.GetAttachmentSection(MessageId=message_id, ContentId=content_id, SectionIndex=idx)
                 except TypeError:
                     section = svc.GetAttachmentSection(message_id, content_id, idx)
-                section_data = serialize_object(section) if section is not None else {}
-                part_b64 = section_data.get("Contents")
-                if part_b64:
-                    combined.extend(base64.b64decode(part_b64))
+                section_data = serialize_object(section) if section is not None else None
+                part_value = section_data.get("Contents") if isinstance(section_data, dict) else section_data
+                part = _decode_binary_field(part_value)
+                if part:
+                    combined.extend(part)
             if combined:
-                att["Contents"] = base64.b64encode(bytes(combined)).decode("ascii")
+                att["Contents"] = bytes(combined)
     except Exception:
         return
 
@@ -145,6 +146,23 @@ def _as_list(value: Any) -> List[Any]:
     if isinstance(value, dict):
         return [value]
     return []
+
+
+def _decode_binary_field(value: Any) -> Optional[bytes]:
+    # Zeep may already decode xsd:base64Binary into bytes.
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return base64.b64decode(text)
+        except Exception:
+            return None
+    return None
 
 
 def _payload_file_map(data: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -243,24 +261,42 @@ def _decrypt_attachments(
     aes_iv = None
     gcm_key = None
 
+    # Strategy:
+    # 1. Try OAEP.
+    #    a) Check for DIV Blob ([len][key][iv]). If found, use it (aes_key+aes_iv).
+    #    b) Check for Raw Key (16/24/32 bytes). If valid, keep as candidate (gcm_key).
+    # 2. If no DIV Blob found yet, Try PKCS1v15.
+    #    a) Check for DIV Blob. If found, use it.
+    #    b) Check for Raw Key. If valid, keep as candidate (if no gcm_key yet).
+
     for cand in candidates:
+        # Try OAEP
         try:
-            decrypted_key = decrypt_key_with_private_oaep_sha1(priv_pem, cand["key"])
+            raw = decrypt_key_with_private_oaep_sha1(priv_pem, cand["key"])
+            parsed = _parse_div_encrypted_key(raw)
+            if parsed:
+                aes_key, aes_iv = parsed
+                break  # Found definitive blob
+
+            if len(raw) in (16, 24, 32) and gcm_key is None:
+                gcm_key = raw
         except Exception:
-            continue
-        parsed = _parse_div_encrypted_key(decrypted_key)
-        if parsed:
-            aes_key, aes_iv = parsed
-            break
+            pass
 
     if aes_key is None:
+        # Try PKCS1v15
         for cand in candidates:
             try:
-                gcm_key = decrypt_key_with_private(priv_pem, cand["key"])
-                if gcm_key:
-                    break
+                raw = decrypt_key_with_private(priv_pem, cand["key"])
+                parsed = _parse_div_encrypted_key(raw)
+                if parsed:
+                    aes_key, aes_iv = parsed
+                    break  # Found definitive blob
+
+                if len(raw) in (16, 24, 32) and gcm_key is None:
+                    gcm_key = raw
             except Exception:
-                continue
+                pass
 
     file_map = _payload_file_map(data)
     attachments = data["AttachmentsOutput"].get("AttachmentOutput", [])
@@ -285,7 +321,9 @@ def _decrypt_attachments(
         decrypted_ok = False
         if aes_key and aes_iv and att.get("Contents"):
             try:
-                ciphertext = base64.b64decode(att["Contents"])
+                ciphertext = _decode_binary_field(att.get("Contents"))
+                if not ciphertext:
+                    raise ValueError("Missing/invalid attachment contents")
                 decrypted = decrypt_payload_aes_cbc_pkcs5(aes_key, aes_iv, ciphertext)
                 if compressed:
                     decrypted = gzip.decompress(decrypted)
@@ -297,13 +335,17 @@ def _decrypt_attachments(
         if not decrypted_ok and gcm_key:
             try:
                 if att.get("CipherText") and att.get("IV"):
-                    iv = base64.b64decode(att["IV"])
-                    ct = base64.b64decode(att["CipherText"])
+                    iv = _decode_binary_field(att.get("IV"))
+                    ct = _decode_binary_field(att.get("CipherText"))
                 elif att.get("Contents"):
-                    raw = base64.b64decode(att["Contents"])
+                    raw = _decode_binary_field(att.get("Contents"))
+                    if not raw:
+                        raise ValueError("Missing/invalid attachment contents")
                     iv, ct = raw[:12], raw[12:]
                 else:
                     continue
+                if not iv or not ct:
+                    raise ValueError("Missing/invalid IV/ciphertext")
                 decrypted = decrypt_payload_aes_gcm(gcm_key, iv, ct)
                 if compressed:
                     decrypted = gzip.decompress(decrypted)

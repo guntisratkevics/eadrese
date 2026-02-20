@@ -96,10 +96,17 @@ echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
 
 if ((getenv('DIV_CONFIRM') ?: '0') !== '0') {
     $confirm = $client->confirmMessageSoap($messageId);
+    $dumpReq = trim((string)(getenv('DIV_DUMP_REQUEST_XML') ?: ''));
+    if ($dumpReq !== '' && isset($confirm['request_xml']) && is_string($confirm['request_xml'])) {
+        @file_put_contents($dumpReq, $confirm['request_xml']);
+    }
+    $dumpRaw = trim((string)(getenv('DIV_DUMP_CONFIRM_RAW') ?: ''));
+    if ($dumpRaw !== '' && isset($confirm['raw']) && is_string($confirm['raw'])) {
+        @file_put_contents($dumpRaw, $confirm['raw']);
+    }
     $out2 = [
         'confirm_status' => $confirm['status'] ?? null,
         'fault' => $confirm['body']['Fault'] ?? null,
     ];
     echo json_encode($out2, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
 }
-

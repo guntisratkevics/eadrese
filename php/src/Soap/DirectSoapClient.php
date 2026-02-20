@@ -297,6 +297,7 @@ final class DirectSoapClient
         if (!$senderDocEl instanceof \DOMElement || !$serverMetaEl instanceof \DOMElement) {
             throw new \RuntimeException('EnvelopeXml missing SenderDocument or ServerTransportMetadata');
         }
+        $sectionDigestHints = self::extractSectionDigestHints($envDoc);
 
         // Build combined envelope for signing (Java/.NET style): SenderSection + ServerSection + RecipientSection.
         $combinedDoc = new \DOMDocument('1.0', 'utf-8');
@@ -332,15 +333,38 @@ final class DirectSoapClient
             $netifiedRoot,
             $this->cfg,
             $signatureId,
-            ['SenderSection', 'ServerSection', $entryId]
+            ['SenderSection', 'ServerSection', $entryId],
+            $sectionDigestHints
         );
+        $dumpCombinedSig = trim((string)getenv('DIV_DUMP_COMBINED_SIG_XML'));
+        if ($dumpCombinedSig !== '') {
+            $combinedSigXml = $netDoc->saveXML($signatureEl);
+            if (is_string($combinedSigXml) && $combinedSigXml !== '') {
+                @file_put_contents($dumpCombinedSig, $combinedSigXml);
+            }
+        }
         $signatures = $partDoc->createElementNS(self::NS_DIV, 'Signatures');
         $partRoot->appendChild($signatures);
-        $signatures->appendChild($partDoc->importNode($signatureEl, true));
+        $signatures->appendChild($partDoc->createComment('CONFIRM_SIGNATURE_PLACEHOLDER'));
+        $signatureXml = $netDoc->saveXML($signatureEl);
+        if (!is_string($signatureXml) || trim($signatureXml) === '') {
+            throw new \RuntimeException('Failed to serialize confirmation signature XML');
+        }
 
         $partXml = $partDoc->saveXML($partRoot);
         if ($partXml === false) {
             throw new \RuntimeException('Failed to serialize RecipientConfirmationPart XML');
+        }
+        $signatureXml = self::stripXmlDeclaration($signatureXml);
+        $replaceSigCount = 0;
+        $partXml = str_replace(
+            '<!--CONFIRM_SIGNATURE_PLACEHOLDER-->',
+            $signatureXml,
+            $partXml,
+            $replaceSigCount
+        );
+        if ($replaceSigCount !== 1) {
+            throw new \RuntimeException('Failed to inject confirmation signature XML');
         }
 
         // Build the SOAP ConfirmMessage request and inject the RecipientConfirmationPart verbatim.
@@ -369,6 +393,9 @@ final class DirectSoapClient
         if ($replaceCount !== 1) {
             throw new \RuntimeException('Failed to inject RecipientConfirmationPart into SOAP XML');
         }
+        // NOTE: final ConfirmMessageInput netify is intentionally skipped for PHP transport.
+        // libxslt in ext-xsl may rewrite XAdES prefixes differently than Java/Python and
+        // break DIV recipient-signature validation for otherwise valid signatures.
 
         [$status, $raw] = $this->postSoap($endpoint, $requestXml);
         $faultOrNull = self::tryParseSoapResponse($raw);
@@ -387,6 +414,94 @@ final class DirectSoapClient
             'raw' => $raw,
             'request_xml' => $requestXml,
         ];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function extractSectionDigestHints(\DOMDocument $envelopeDoc): array
+    {
+        $xpath = new \DOMXPath($envelopeDoc);
+        $xpath->registerNamespace('ds', self::NS_DS);
+        $hints = [];
+        $refs = $xpath->query('//ds:Reference[@URI]');
+        if (!$refs) {
+            return $hints;
+        }
+        foreach ($refs as $ref) {
+            if (!$ref instanceof \DOMElement) {
+                continue;
+            }
+            $uri = trim((string)$ref->getAttribute('URI'));
+            if ($uri !== '#SenderSection' && $uri !== '#ServerSection') {
+                continue;
+            }
+            $sectionId = substr($uri, 1);
+            if (!is_string($sectionId) || $sectionId === '' || isset($hints[$sectionId])) {
+                continue;
+            }
+            $digest = trim((string)$xpath->evaluate('string(./ds:DigestValue[1])', $ref));
+            if ($digest !== '') {
+                $hints[$sectionId] = $digest;
+            }
+        }
+        return $hints;
+    }
+
+    private static function netifyConfirmInputInSoapContext(string $requestXml): string
+    {
+        $doc = new \DOMDocument();
+        $doc->preserveWhiteSpace = false;
+        $doc->formatOutput = false;
+        if (!@$doc->loadXML($requestXml)) {
+            return $requestXml;
+        }
+
+        $xpath = new \DOMXPath($doc);
+        $confirmInput = $xpath->query('//*[local-name()="ConfirmMessageInput"][1]')?->item(0);
+        if (!$confirmInput instanceof \DOMElement) {
+            return $requestXml;
+        }
+
+        $netified = DivNetify::netifyElement($confirmInput);
+        $replacement = $doc->importNode($netified, true);
+        if (!$replacement instanceof \DOMElement) {
+            return $requestXml;
+        }
+
+        $parent = $confirmInput->parentNode;
+        if (!$parent instanceof \DOMNode) {
+            return $requestXml;
+        }
+        $parent->replaceChild($replacement, $confirmInput);
+
+        $updated = $doc->saveXML();
+        return is_string($updated) && $updated !== '' ? $updated : $requestXml;
+    }
+
+    private static function resignConfirmSignatureInSoapContext(string $requestXml, Config $cfg): string
+    {
+        $doc = new \DOMDocument();
+        $doc->preserveWhiteSpace = false;
+        $doc->formatOutput = false;
+        if (!@$doc->loadXML($requestXml)) {
+            return $requestXml;
+        }
+
+        $xpath = new \DOMXPath($doc);
+        $xpath->registerNamespace('ds', self::NS_DS);
+        $sig = $xpath->query(
+            '//*[local-name()="RecipientConfirmationPart"][1]/*[local-name()="Signatures"][1]/ds:Signature[1]'
+        )?->item(0);
+        if (!$sig instanceof \DOMElement) {
+            return $requestXml;
+        }
+
+        // Keep Sender/Server/Recipient digests as originally produced in the combined-context sign step.
+        // Only refresh SignedProperties digest after SOAP-context netify and then re-sign SignedInfo.
+        DivEnvelopeSigner::resignSignatureValueInContext($sig, $cfg, false);
+        $updated = $doc->saveXML();
+        return is_string($updated) && $updated !== '' ? $updated : $requestXml;
     }
 
     /**
