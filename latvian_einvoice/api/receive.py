@@ -369,8 +369,25 @@ def _auto_confirm(
     msg_id = data.get("MessageId") or data.get("messageId")
     if not msg_id:
         return
+    recipients = data.get("Recipients") if isinstance(data, dict) else None
+    recipient_eaddresses = None
+    if isinstance(recipients, dict):
+        values = recipients.get("string")
+        if isinstance(values, list):
+            recipient_eaddresses = values
+        elif isinstance(values, str):
+            recipient_eaddresses = [values]
+    elif isinstance(recipients, list):
+        recipient_eaddresses = recipients
+    confirmation_name = data.get("ConfirmationName") if isinstance(data, dict) else None
     try:
-        confirm_message(token_provider, soap_client, msg_id)
+        confirm_message(
+            token_provider,
+            soap_client,
+            msg_id,
+            recipient_eaddresses=recipient_eaddresses,
+            confirmation_name=confirmation_name,
+        )
         data["Confirmed"] = True
     except Exception as exc:
         data["Confirmed"] = False

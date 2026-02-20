@@ -23,6 +23,11 @@ Implemented but not yet validated end-to-end
 - Full long-run stress matrix for all attachment variants via PHP path (single-message and scripted smoke are validated).
 - GCM attachment send path still has schema/profile caveats in some clients; `oaep_cbc` remains the safer mode for attachment sends.
 
+Release gate (STAGE-only)
+- Local unit tests are quick checks only.
+- Functional validation is accepted only from STAGE (`10.1.0.6`) runs.
+- The authoritative matrix is `docs/eadrese-stage-test-matrix.md` in the `odoo-infra` repo.
+
 ## Support / Donate (Overall)
 If this SDK helps your work and you want to support further development:
 - https://revolut.me/guntisha2j
@@ -119,6 +124,7 @@ Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAt
 are implemented; receive/decrypt/confirm smoke is validated, while broader stress coverage is still recommended.
 
 ## Testing
+Local quick checks (not release gates):
 ```bash
 pytest
 ```
@@ -127,6 +133,13 @@ pytest
 cd php
 composer install
 composer test
+```
+
+Required release validation (STAGE):
+```powershell
+./scripts/sync_eadrese_python_stage.ps1
+./scripts/test_eadrese_receive_confirm_stage.ps1 -PythonOnly -Confirm
+./scripts/test_eadrese_receive_confirm_stage.ps1 -PhpOnly -Confirm
 ```
 
 ### Support Python Development

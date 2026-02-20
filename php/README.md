@@ -25,6 +25,11 @@ Implemented but not yet validated end-to-end
 - Broad stress matrix across all MTOM/sectioned attachment variants under sustained load.
 - Long-run operational hardening (retry/backoff/timeout strategies in production-like workloads).
 
+Release gate (STAGE-only)
+- Local `composer test` is optional and not a release gate.
+- Functional checks are accepted only from STAGE (`10.1.0.6`) smoke runs.
+- Track outcomes in `docs/eadrese-stage-test-matrix.md` (odoo-infra repo root).
+
 ## Usage (building envelope)
 ```php
 use LatvianEinvoice\Attachment;
@@ -103,6 +108,11 @@ php examples/soap_receive_and_confirm.php
 ## Composer
 ```bash
 composer install
+```
+
+STAGE smoke command:
+```powershell
+./scripts/test_eadrese_receive_confirm_stage.ps1 -PhpOnly -Confirm
 ```
 
 ## Notes
