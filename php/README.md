@@ -1,26 +1,29 @@
 # PHP client (experimental)
 
-This directory contains an early-stage PHP client for Latvia's e-Address (DIV / VUS).
-It focuses on configuration, envelope construction, and experimental direct SOAP SendMessage signing (WSSE + SenderDocument).
+This directory contains an experimental PHP client for Latvia's e-Address (DIV / VUS).
+It focuses on direct SOAP (mTLS + WSSE + DIV signing), message retrieval, attachment decode/decrypt, and confirmation flows.
 
 ## Status
 - Envelope builder (SenderDocument + attachments metadata).
-- AES-GCM payload encryption helper (outbound placeholder).
+- AES-GCM payload encryption helper.
 - OAEP+AES-CBC outbound helper (DIV-aligned mode).
 - DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
 - Direct SOAP `SendMessage` (mTLS + WSSE + SenderDocument signature) is implemented and validated from STAGE.
 - Direct SOAP `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage` are implemented.
 - Decoder helpers for attachment section stitching + decrypt/decompress are implemented.
+- Combined-envelope confirm signing + netify normalization is implemented to match Java/.NET profile behavior.
 
-## Validation Status (as of 2026-02-11)
+## Validation Status (as of 2026-02-20)
 Tested and working
 - Direct SOAP `SendMessage` from STAGE (`php examples/soap_send.php`) returns HTTP 200 and MessageId.
 - Direct SOAP `GetMessageList` from STAGE (`php examples/soap_get_message_list.php`) returns HTTP 200.
 - MIME normalization for encrypted `text/*` attachments is applied in envelope builder.
+- `ConfirmMessage` on STAGE (manual and scripted runs) returns success and consumes inbox messages.
+- `GetMessage` + attachment decode/decrypt + confirm smoke path is validated via `examples/soap_receive_and_confirm.php`.
 
 Implemented but not yet validated end-to-end
-- Full receive/decrypt flow against real inbound messages with attachments (test inbox currently empty).
-- `ConfirmMessage` against real inbound messages.
+- Broad stress matrix across all MTOM/sectioned attachment variants under sustained load.
+- Long-run operational hardening (retry/backoff/timeout strategies in production-like workloads).
 
 ## Usage (building envelope)
 ```php
@@ -79,7 +82,22 @@ php examples/soap_send.php
 
 Running via Docker:
 ```bash
-sudo docker run --rm --network host -v /path/to/php:/app -w /app php:8.2-cli php examples/soap_send.php
+sudo docker run --rm --network host -v /path/to/php:/app -w /app <php-image-with-soap-curl-xsl> php examples/soap_send.php
+```
+Example STAGE image used in smoke tests: `php82-cli-xsl`.
+
+## Usage (direct SOAP receive + optional confirm)
+```bash
+composer install
+DIV_WSDL_URL='https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl' \
+DIV_CLIENT_CERT='/path/to/client.crt.pem' \
+DIV_CLIENT_KEY='/path/to/client.key.pem' \
+DIV_SIGN_CERT='/path/to/client.crt.pem' \
+DIV_SIGN_KEY='/path/to/client.key.pem' \
+DIV_SENDER='_PRIVATE@<REG_NO>' \
+DIV_VERIFY_SSL=0 \
+DIV_CONFIRM=1 \
+php examples/soap_receive_and_confirm.php
 ```
 
 ## Composer

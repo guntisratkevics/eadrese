@@ -9,16 +9,19 @@ Status / caveats
 - Cryptographic and protocol details are still being validated against the official clients.
 - Response signature and OCSP validation are best-effort.
 
-## Validation Status (as of 2026-02-11)
+## Validation Status (as of 2026-02-20)
 Tested and working
 - Python crypto/envelope test suite (`tests/test_crypto.py`) passes.
 - Encrypted `text/*` MIME normalization is aligned in Python and PHP envelope builders (`application/octet-stream` for encrypted text attachments).
+- Python receive/decrypt flow (`GetMessageList` + `GetMessage` + `GetAttachmentSection`) and DIV AES-CBC decrypt path were validated on STAGE with real inbox messages (including sectioned payloads).
+- Python `ConfirmMessage` was validated on STAGE and consumed inbox messages successfully.
 - PHP direct SOAP `SendMessage` works from STAGE (HTTP 200, MessageId returned).
 - PHP direct SOAP `GetMessageList` works from STAGE (HTTP 200 response shape validated).
+- PHP `ConfirmMessage` was validated on STAGE (manual + scripted runs, HTTP 200, inbox consumption confirmed).
 
 Implemented but not yet validated end-to-end
-- Real inbound message retrieval with attachments (`GetMessage` + `GetAttachmentSection` + decode/decrypt) because the test inbox is currently empty.
-- `ConfirmMessage` against real inbound messages.
+- Full long-run stress matrix for all attachment variants via PHP path (single-message and scripted smoke are validated).
+- GCM attachment send path still has schema/profile caveats in some clients; `oaep_cbc` remains the safer mode for attachment sends.
 
 ## Support / Donate (Overall)
 If this SDK helps your work and you want to support further development:
@@ -34,7 +37,7 @@ VRAA operational notes (from support replies)
 - Signs SenderDocument with XMLDSig + XAdES-BES (RSA-SHA512, SHA-512 digests; XAdES v1.3.2 SignedProperties).
 - Adds WS-Security signature to the SOAP header (RSA-SHA1/SHA1) with Timestamp + To, matching the Java profile.
 - Supports mTLS client auth; OAuth2 client-credentials token is optional when required by the environment.
-- Optional outbound attachment encryption (AES-GCM placeholder) with per-recipient EncryptionInfo.
+- Optional outbound attachment encryption with per-recipient `EncryptionInfo` (`gcm` and DIV-aligned `oaep_cbc`).
 - Inbound attachment decryption for DIV AES-CBC + RSA-OAEP (SHA1) key wrapping with optional GZIP decompression.
 - Optional VID subaddress auto-add for EINVOICE.
 
@@ -50,6 +53,11 @@ VRAA operational notes (from support replies)
 - XAdES: ETSI XAdES v1.3.2 (SignedProperties).
 - WS-Security: OASIS 2004 profile (BinarySecurityToken + SecurityTokenReference).
 - TLS: mutual TLS (client cert + key).
+
+## Requirements
+- Python 3.9+.
+- `xmlsec` is required for XML signature paths (SenderDocument and WSSE signing/confirm flows).
+- For mTLS + WSSE, provide PEM certificate/key files with a private key.
 
 ## Installation
 ```bash
@@ -104,15 +112,21 @@ cfg = EAddressConfig(
 - docs/python-client-spec.md
 - docs/security.md
 
-## PHP (early stage)
+## PHP client
 An experimental PHP client lives under `php/`.
 It focuses on direct SOAP (mTLS + WSSE + DIV signing) flows and no longer includes the Java sidecar-dependent variant.
 Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage`
-are implemented, but receive/decrypt/confirm still needs full end-to-end validation with real inbound attachment messages.
+are implemented; receive/decrypt/confirm smoke is validated, while broader stress coverage is still recommended.
 
 ## Testing
 ```bash
 pytest
+```
+
+```bash
+cd php
+composer install
+composer test
 ```
 
 ### Support Python Development
