@@ -104,9 +104,9 @@ final class Builder
             'GeneralMetadata' => [
                 'Authors' => ['AuthorEntry' => [['Institution' => ['Title' => $senderEAddress ?: 'Sender']]]],
                 'Date' => $now->format('Y-m-d'),
-                'Title' => $subject,
-                'Description' => $bodyText,
                 'DocumentKind' => $documentKind,
+                'Description' => $bodyText,
+                'Title' => $subject,
             ],
         ];
         if (!empty($files)) {

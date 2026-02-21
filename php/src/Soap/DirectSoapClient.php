@@ -15,10 +15,15 @@ final class DirectSoapClient
     private const NS_DS = 'http://www.w3.org/2000/09/xmldsig#';
 
     private const ACTION_SEND_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/SendMessage';
+    private const ACTION_INIT_SEND_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/InitSendMessage';
+    private const ACTION_SEND_ATTACHMENT_SECTION = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/SendAttachmentSection';
+    private const ACTION_COMPLETE_SEND_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/CompleteSendMessage';
     private const ACTION_GET_MESSAGE_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetMessageList';
     private const ACTION_GET_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetMessage';
     private const ACTION_GET_ATTACHMENT_SECTION = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetAttachmentSection';
     private const ACTION_CONFIRM_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/ConfirmMessage';
+    private const MAX_MESSAGE_FILES_SIZE = 0x400000; // 4 MiB
+    private const ATTACHMENT_SECTION_SIZE = 0x400000; // 4 MiB
 
     private Config $cfg;
 
@@ -44,6 +49,61 @@ final class DirectSoapClient
             'raw' => $raw,
             'request_xml' => $requestXml,
             'message_id' => bin2hex(random_bytes(16)),
+        ];
+    }
+
+    /**
+     * Send a prepared message built by Envelope\Builder.
+     *
+     * @param array<string,mixed> $envelope
+     * @param array<string,mixed>|null $attachmentsInput
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
+     */
+    public function sendMessageFromEnvelope(
+        array $envelope,
+        ?array $attachmentsInput = null,
+        ?string $messageClientId = null
+    ): array {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+        [$divDoc, $divEnv] = self::buildDivEnvelopeDocument($envelope);
+
+        DivEnvelopeSigner::signEnvelope($divDoc, $divEnv, $this->cfg);
+        $divXml = $divEnv->C14N(true, false, null, ['ds', 'addr']);
+        if ($divXml === false) {
+            throw new \RuntimeException('Failed to serialize DIV Envelope (C14N)');
+        }
+
+        $messageClientId = trim((string)($messageClientId ?? self::senderRefFromEnvelope($envelope) ?? ''));
+        if ($messageClientId === '') {
+            $messageClientId = bin2hex(random_bytes(16));
+        }
+
+        $senderEAddress = self::senderAddressFromEnvelope($envelope, $this->cfg->defaultFrom);
+        $parsedAttachmentItems = self::parseAttachmentInputItems($attachmentsInput);
+        $totalAttachmentSize = self::totalAttachmentSize($parsedAttachmentItems);
+
+        if ($totalAttachmentSize > self::MAX_MESSAGE_FILES_SIZE) {
+            return $this->sendMessageChunked(
+                $endpoint,
+                $divXml,
+                $messageClientId,
+                $senderEAddress,
+                $parsedAttachmentItems
+            );
+        }
+
+        $requestAttachmentItems = self::buildRequestAttachmentItems($parsedAttachmentItems);
+        $requestXml = $this->buildSoapRequestXml($endpoint, $divXml, $requestAttachmentItems);
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $decoded = self::tryParseSoapResponse($raw);
+        $effectiveMessageId = self::extractMessageId($decoded, $messageClientId);
+        return [
+            'status' => $status,
+            'body' => $decoded,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'message_id' => $effectiveMessageId,
         ];
     }
 
@@ -617,6 +677,483 @@ final class DirectSoapClient
         ];
     }
 
+    /**
+     * @param list<array{index:int,content_id:string,contents_b64:string,contents_bytes:string,size:int}> $attachmentItems
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
+     */
+    private function sendMessageChunked(
+        string $endpoint,
+        string $divEnvelopeXml,
+        string $messageClientId,
+        string $senderEAddress,
+        array $attachmentItems
+    ): array {
+        [$inline, $separate] = self::splitInlineAndSeparateAttachmentItems($attachmentItems);
+        $initAttachmentItems = self::buildInitAttachmentItems($attachmentItems, $inline);
+        $init = $this->initSendMessage($endpoint, $messageClientId, $senderEAddress, $initAttachmentItems);
+
+        $initBody = is_array($init['body'] ?? null) ? $init['body'] : null;
+        if (is_array($initBody) && array_key_exists('Fault', $initBody)) {
+            $init['message_id'] = $messageClientId;
+            return $init;
+        }
+        $serverMessageId = self::extractMessageId($initBody, $messageClientId);
+
+        foreach ($separate as $item) {
+            foreach (self::buildAttachmentSections($item['contents_bytes']) as $sectionIndex => $sectionContents) {
+                $this->sendAttachmentSection(
+                    $endpoint,
+                    $serverMessageId,
+                    $item['content_id'],
+                    $sectionIndex,
+                    $sectionContents
+                );
+            }
+        }
+
+        $complete = $this->completeSendMessage($endpoint, $serverMessageId, $divEnvelopeXml);
+        $complete['message_id'] = $serverMessageId;
+        return $complete;
+    }
+
+    /**
+     * @param list<array{ContentId:string,Contents?:string}> $attachmentItems
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
+     */
+    private function initSendMessage(
+        string $endpoint,
+        string $messageClientId,
+        string $senderEAddress,
+        array $attachmentItems
+    ): array {
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'InitSendMessageInput');
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'MessageClientId', $messageClientId));
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'SenderEAddress', $senderEAddress));
+        self::appendAttachmentInputs($doc, $input, $attachmentItems);
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_INIT_SEND_MESSAGE);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $decoded = self::tryParseSoapResponse($raw);
+        $messageId = self::extractMessageId($decoded, $messageClientId);
+        return [
+            'status' => $status,
+            'body' => $decoded,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'message_id' => $messageId,
+        ];
+    }
+
+    /**
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    private function sendAttachmentSection(
+        string $endpoint,
+        string $messageId,
+        string $contentId,
+        int $sectionIndex,
+        ?string $contentsBytes
+    ): array {
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'SendAttachmentSectionInput');
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'MessageId', $messageId));
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'ContentId', $contentId));
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'SectionIndex', (string)$sectionIndex));
+        if ($contentsBytes !== null) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'Contents', base64_encode($contentsBytes)));
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_SEND_ATTACHMENT_SECTION);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $decoded = self::tryParseSoapResponse($raw);
+        return [
+            'status' => $status,
+            'body' => $decoded,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+        ];
+    }
+
+    /**
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    private function completeSendMessage(string $endpoint, string $messageId, string $divEnvelopeXml): array
+    {
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'CompleteSendMessageInput');
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'MessageId', $messageId));
+        $input->appendChild($doc->createComment('DIV_ENVELOPE_PLACEHOLDER'));
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_COMPLETE_SEND_MESSAGE);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+        $replaceCount = 0;
+        $requestXml = str_replace('<!--DIV_ENVELOPE_PLACEHOLDER-->', $divEnvelopeXml, $requestXml, $replaceCount);
+        if ($replaceCount !== 1) {
+            throw new \RuntimeException('Failed to inject DIV Envelope into SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $decoded = self::tryParseSoapResponse($raw);
+        return [
+            'status' => $status,
+            'body' => $decoded,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $envelope
+     * @return array{0:\DOMDocument,1:\DOMElement}
+     */
+    private static function buildDivEnvelopeDocument(array $envelope): array
+    {
+        $senderDocument = $envelope['SenderDocument'] ?? null;
+        if (!is_array($senderDocument)) {
+            throw new \RuntimeException('Envelope payload is missing SenderDocument');
+        }
+
+        $divDoc = new \DOMDocument('1.0', 'utf-8');
+        $divDoc->formatOutput = false;
+        $divDoc->preserveWhiteSpace = false;
+
+        $divEnv = $divDoc->createElementNS(self::NS_DIV, 'Envelope');
+        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:addr', self::NS_ADDR);
+        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:ds', self::NS_DS);
+        $divDoc->appendChild($divEnv);
+
+        self::appendDivValue($divDoc, $divEnv, 'SenderDocument', $senderDocument);
+        $divEnv->appendChild($divDoc->createElementNS(self::NS_DIV, 'Signatures'));
+        return [$divDoc, $divEnv];
+    }
+
+    private static function appendDivValue(\DOMDocument $doc, \DOMElement $parent, string $name, mixed $value): void
+    {
+        if ($value === null) {
+            return;
+        }
+        if (is_array($value) && array_is_list($value)) {
+            foreach ($value as $item) {
+                self::appendDivValue($doc, $parent, $name, $item);
+            }
+            return;
+        }
+
+        $el = $doc->createElementNS(self::NS_DIV, $name);
+        if (is_array($value)) {
+            if (array_key_exists('Algorithm', $value) && $value['Algorithm'] !== null && !is_array($value['Algorithm'])) {
+                $el->setAttribute('Algorithm', self::scalarToXmlText($value['Algorithm']));
+            }
+            if (array_key_exists('Id', $value) && $value['Id'] !== null) {
+                $el->setAttribute('Id', (string)$value['Id']);
+            }
+            foreach ($value as $childName => $childValue) {
+                if (!is_string($childName) || $childName === 'Id' || $childName === 'Algorithm') {
+                    continue;
+                }
+                self::appendDivValue($doc, $el, $childName, $childValue);
+            }
+        } else {
+            $el->nodeValue = self::scalarToXmlText($value);
+        }
+        $parent->appendChild($el);
+    }
+
+    private static function scalarToXmlText(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+        return (string)$value;
+    }
+
+    /**
+     * @param array<string,mixed> $envelope
+     */
+    private static function senderAddressFromEnvelope(array $envelope, string $fallback): string
+    {
+        $value = $envelope['SenderDocument']['SenderTransportMetadata']['SenderE-Address'] ?? null;
+        $sender = trim((string)($value ?? ''));
+        if ($sender === '') {
+            $sender = trim($fallback);
+        }
+        return $sender;
+    }
+
+    /**
+     * @param array<string,mixed> $envelope
+     */
+    private static function senderRefFromEnvelope(array $envelope): ?string
+    {
+        $value = $envelope['SenderDocument']['SenderTransportMetadata']['SenderRefNumber'] ?? null;
+        $senderRef = trim((string)($value ?? ''));
+        return $senderRef !== '' ? $senderRef : null;
+    }
+
+    /**
+     * @param array<string,mixed>|null $attachmentsInput
+     * @return list<array{index:int,content_id:string,contents_b64:string,contents_bytes:string,size:int}>
+     */
+    private static function parseAttachmentInputItems(?array $attachmentsInput): array
+    {
+        if ($attachmentsInput === null) {
+            return [];
+        }
+
+        $rawItems = $attachmentsInput['AttachmentInput'] ?? [];
+        if (!is_array($rawItems)) {
+            return [];
+        }
+        if (array_key_exists('ContentId', $rawItems)) {
+            $rawItems = [$rawItems];
+        }
+
+        $parsed = [];
+        foreach ($rawItems as $index => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $contentId = trim((string)($item['ContentId'] ?? $index));
+            if ($contentId === '') {
+                $contentId = (string)$index;
+            }
+            if (!array_key_exists('Contents', $item) || $item['Contents'] === null || $item['Contents'] === '') {
+                throw new \RuntimeException(
+                    'AttachmentInput without Contents is not supported for large-file send flow; ' .
+                    'use oaep_cbc mode for encrypted attachment sends.'
+                );
+            }
+            [$contentsBytes, $contentsB64] = self::decodeAttachmentContents($item['Contents']);
+            $parsed[] = [
+                'index' => (int)$index,
+                'content_id' => $contentId,
+                'contents_b64' => $contentsB64,
+                'contents_bytes' => $contentsBytes,
+                'size' => strlen($contentsBytes),
+            ];
+        }
+        return $parsed;
+    }
+
+    /**
+     * @return array{0:string,1:string}
+     */
+    private static function decodeAttachmentContents(mixed $rawValue): array
+    {
+        if (is_string($rawValue)) {
+            $clean = preg_replace('/\s+/', '', $rawValue) ?? $rawValue;
+            if ($clean === '') {
+                return ['', ''];
+            }
+            $decoded = base64_decode($clean, true);
+            if ($decoded !== false) {
+                return [$decoded, base64_encode($decoded)];
+            }
+            // If caller supplied raw bytes as a string, allow it and normalize to base64.
+            return [$rawValue, base64_encode($rawValue)];
+        }
+        throw new \RuntimeException('Unsupported AttachmentInput contents type: ' . get_debug_type($rawValue));
+    }
+
+    /**
+     * @param list<array{size:int}> $items
+     */
+    private static function totalAttachmentSize(array $items): int
+    {
+        $total = 0;
+        foreach ($items as $item) {
+            $total += (int)($item['size'] ?? 0);
+        }
+        return $total;
+    }
+
+    /**
+     * @param list<array{content_id:string,contents_b64:string}> $items
+     * @return list<array{ContentId:string,Contents:string}>
+     */
+    private static function buildRequestAttachmentItems(array $items): array
+    {
+        $out = [];
+        foreach ($items as $item) {
+            $out[] = [
+                'ContentId' => (string)$item['content_id'],
+                'Contents' => (string)$item['contents_b64'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<array{index:int,size:int}> $attachmentItems
+     * @return array{0:list<array>,1:list<array>}
+     */
+    private static function splitInlineAndSeparateAttachmentItems(array $attachmentItems): array
+    {
+        $bySize = $attachmentItems;
+        usort(
+            $bySize,
+            static fn(array $left, array $right): int => ($left['size'] ?? 0) <=> ($right['size'] ?? 0)
+        );
+
+        $inlineIds = [];
+        $running = 0;
+        foreach ($bySize as $item) {
+            $size = (int)($item['size'] ?? 0);
+            if ($running + $size <= self::MAX_MESSAGE_FILES_SIZE) {
+                $inlineIds[(int)$item['index']] = true;
+                $running += $size;
+            }
+        }
+
+        $inline = [];
+        $separate = [];
+        foreach ($attachmentItems as $item) {
+            if (!empty($inlineIds[(int)$item['index']])) {
+                $inline[] = $item;
+            } else {
+                $separate[] = $item;
+            }
+        }
+        return [$inline, $separate];
+    }
+
+    /**
+     * @param list<array{index:int,content_id:string,contents_b64:string}> $all
+     * @param list<array{index:int}> $inline
+     * @return list<array{ContentId:string,Contents?:string}>
+     */
+    private static function buildInitAttachmentItems(array $all, array $inline): array
+    {
+        $inlineIds = [];
+        foreach ($inline as $item) {
+            $inlineIds[(int)$item['index']] = true;
+        }
+
+        $out = [];
+        foreach ($all as $item) {
+            $row = ['ContentId' => (string)$item['content_id']];
+            if (!empty($inlineIds[(int)$item['index']])) {
+                $row['Contents'] = (string)$item['contents_b64'];
+            }
+            $out[] = $row;
+        }
+        return $out;
+    }
+
+    /**
+     * @return list<string|null>
+     */
+    private static function buildAttachmentSections(string $contents): array
+    {
+        $sections = [];
+        $length = strlen($contents);
+        for ($offset = 0; $offset < $length; $offset += self::ATTACHMENT_SECTION_SIZE) {
+            $sections[] = substr($contents, $offset, self::ATTACHMENT_SECTION_SIZE);
+        }
+        if ($length > 0 && $length % self::ATTACHMENT_SECTION_SIZE === 0) {
+            $sections[] = null;
+        }
+        return $sections;
+    }
+
+    /**
+     * @param array<string,mixed>|null $decoded
+     */
+    private static function extractMessageId(?array $decoded, string $fallback): string
+    {
+        if (is_array($decoded)) {
+            $id = trim((string)($decoded['MessageId'] ?? $decoded['messageId'] ?? ''));
+            if ($id !== '') {
+                return $id;
+            }
+        }
+        return $fallback;
+    }
+
+    /**
+     * @param list<array{ContentId:string,Contents?:string}> $attachmentItems
+     */
+    private static function appendAttachmentInputs(
+        \DOMDocument $doc,
+        \DOMElement $parent,
+        array $attachmentItems
+    ): void {
+        if (empty($attachmentItems)) {
+            return;
+        }
+        $attachmentsEl = $doc->createElementNS(self::NS_UUI, 'AttachmentsInput');
+        foreach ($attachmentItems as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $contentId = trim((string)($item['ContentId'] ?? ''));
+            if ($contentId === '') {
+                continue;
+            }
+            $attachmentEl = $doc->createElementNS(self::NS_UUI, 'AttachmentInput');
+            $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, 'ContentId', $contentId));
+            $contents = $item['Contents'] ?? null;
+            if (is_string($contents) && $contents !== '') {
+                $contents = preg_replace('/\s+/', '', $contents) ?? $contents;
+                $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, 'Contents', $contents));
+            }
+            $attachmentsEl->appendChild($attachmentEl);
+        }
+        if ($attachmentsEl->childNodes->length > 0) {
+            $parent->appendChild($attachmentsEl);
+        }
+    }
+
     private function endpointFromWsdl(string $wsdlUrl): string
     {
         if (str_ends_with(strtolower($wsdlUrl), '?wsdl')) {
@@ -625,7 +1162,14 @@ final class DirectSoapClient
         return $wsdlUrl;
     }
 
-    private function buildSoapRequestXml(string $endpoint, string $divEnvelopeXml): string
+    /**
+     * @param list<array{ContentId:string,Contents?:string}>|null $attachmentItems
+     */
+    private function buildSoapRequestXml(
+        string $endpoint,
+        string $divEnvelopeXml,
+        ?array $attachmentItems = null
+    ): string
     {
         $doc = new \DOMDocument('1.0', 'utf-8');
         $doc->formatOutput = false;
@@ -645,6 +1189,9 @@ final class DirectSoapClient
         // Insert the DIV XML via string replacement after WSSE is applied, so the SOAP serializer cannot
         // rewrite namespace declarations inside the DIV envelope.
         $sendInput->appendChild($doc->createComment('DIV_ENVELOPE_PLACEHOLDER'));
+        if (is_array($attachmentItems)) {
+            self::appendAttachmentInputs($doc, $sendInput, $attachmentItems);
+        }
 
         WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_SEND_MESSAGE);
 

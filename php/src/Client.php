@@ -163,8 +163,47 @@ final class Client
         return $result;
     }
 
-    public function sendMessage(): void
-    {
-        throw new \RuntimeException('SendMessage is not implemented in the PHP client yet.');
+    /**
+     * Direct SOAP SendMessage using Envelope\Builder output.
+     *
+     * @param string[] $recipients
+     * @param Attachment[] $attachments
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
+     */
+    public function sendMessage(
+        array $recipients,
+        string $documentKindCode = 'EINVOICE',
+        string $subject = 'Electronic invoice',
+        string $bodyText = 'Please see the attached e-invoice.',
+        array $attachments = [],
+        ?string $encryptionKeyB64 = null,
+        ?string $recipientThumbprintB64 = null,
+        ?string $symmetricKeyBytes = null,
+        ?string $symmetricIvBytes = null,
+        ?string $traceText = 'Created',
+        bool $notifySenderOnDelivery = false,
+        ?string $encryptionMode = null
+    ): array {
+        [$envelope, $attachmentsInput, $messageId] = $this->buildEnvelope(
+            $recipients,
+            $documentKindCode,
+            $subject,
+            $bodyText,
+            $attachments,
+            $encryptionKeyB64,
+            $recipientThumbprintB64,
+            $symmetricKeyBytes,
+            $symmetricIvBytes,
+            $traceText,
+            $notifySenderOnDelivery,
+            $encryptionMode
+        );
+
+        $soap = new DirectSoapClient($this->config);
+        return $soap->sendMessageFromEnvelope(
+            $envelope,
+            is_array($attachmentsInput) ? $attachmentsInput : null,
+            $messageId
+        );
     }
 }

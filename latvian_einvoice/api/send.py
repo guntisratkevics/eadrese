@@ -1,7 +1,8 @@
+import base64
 import logging
 import os
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 from zeep.helpers import serialize_object
 
 from ..attachments import Attachment
@@ -18,6 +19,186 @@ from ..utils_crypto import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_MESSAGE_FILES_SIZE = 0x400000  # 4 MiB
+_ATTACHMENT_SECTION_SIZE = 0x400000  # 4 MiB
+
+
+def _call_service_method(
+    svc: Any,
+    method_name: str,
+    *,
+    token: str | None,
+    kwargs: Mapping[str, Any],
+):
+    method = getattr(svc, method_name, None)
+    if method is None:
+        raise EAddressSoapError(f"Service has no {method_name} method")
+
+    if token:
+        try:
+            return method(Token=token, **kwargs)
+        except TypeError:
+            pass
+
+    try:
+        return method(**kwargs)
+    except TypeError as exc:
+        # Keep simple stubs/test doubles working for SendMessage fallback signatures.
+        if method_name == "SendMessage":
+            envelope = kwargs.get("Envelope")
+            attachments_input = kwargs.get("AttachmentsInput")
+            if token:
+                try:
+                    return method(token, envelope, attachments_input)
+                except TypeError:
+                    pass
+                try:
+                    return method(token, envelope)
+                except TypeError:
+                    pass
+            try:
+                return method(envelope, attachments_input)
+            except TypeError:
+                pass
+            return method(envelope)
+        raise exc
+
+
+def _extract_message_id(response: Any, fallback: str) -> str:
+    data = serialize_object(response) if response is not None else {}
+    if isinstance(data, str):
+        text = data.strip()
+        if text:
+            return text
+    if isinstance(data, bytes):
+        text = data.decode("utf-8", errors="ignore").strip()
+        if text:
+            return text
+    message_id_out = None
+    if isinstance(data, Mapping):
+        message_id_out = data.get("MessageId") or data.get("messageId")
+    if not message_id_out:
+        message_id_out = fallback
+    return str(message_id_out)
+
+
+def _decode_contents_field(raw_value: Any) -> bytes:
+    if raw_value is None:
+        return b""
+    if isinstance(raw_value, bytes):
+        return raw_value
+    if isinstance(raw_value, str):
+        value = raw_value.strip()
+        if not value:
+            return b""
+        return base64.b64decode(value)
+    raise EAddressSoapError(f"Unsupported AttachmentInput contents type: {type(raw_value)!r}")
+
+
+def _split_inline_and_separate_attachments(
+    attachment_inputs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    by_size = sorted(attachment_inputs, key=lambda x: x["size"])
+    inline_ids: set[int] = set()
+    running = 0
+    for item in by_size:
+        if running + item["size"] <= _MAX_MESSAGE_FILES_SIZE:
+            inline_ids.add(item["index"])
+            running += item["size"]
+
+    inline = [item for item in attachment_inputs if item["index"] in inline_ids]
+    separate = [item for item in attachment_inputs if item["index"] not in inline_ids]
+    return inline, separate
+
+
+def _send_message_chunked(
+    svc: Any,
+    *,
+    token: str | None,
+    envelope: Mapping[str, Any],
+    built_message_id: str,
+    attachment_inputs: list[dict[str, Any]],
+) -> str:
+    inline, separate = _split_inline_and_separate_attachments(attachment_inputs)
+
+    init_items: list[dict[str, Any]] = []
+    inline_map = {item["index"]: item for item in inline}
+    for item in attachment_inputs:
+        if item["index"] in inline_map:
+            init_items.append(
+                {
+                    "ContentId": item["content_id"],
+                    "Contents": item["contents_b64"],
+                }
+            )
+        else:
+            init_items.append({"ContentId": item["content_id"]})
+
+    sender_address = (
+        envelope.get("SenderDocument", {})
+        .get("SenderTransportMetadata", {})
+        .get("SenderE-Address", "")
+    )
+    init_kwargs: dict[str, Any] = {
+        "MessageClientId": built_message_id,
+        "SenderEAddress": sender_address,
+    }
+    if init_items:
+        init_kwargs["AttachmentsInput"] = {"AttachmentInput": init_items}
+
+    init_response = _call_service_method(
+        svc,
+        "InitSendMessage",
+        token=token,
+        kwargs=init_kwargs,
+    )
+    server_message_id = _extract_message_id(init_response, built_message_id)
+
+    for item in separate:
+        content = item["contents_bytes"]
+        content_id = item["content_id"]
+        section_index = 0
+        for offset in range(0, len(content), _ATTACHMENT_SECTION_SIZE):
+            chunk = content[offset : offset + _ATTACHMENT_SECTION_SIZE]
+            _call_service_method(
+                svc,
+                "SendAttachmentSection",
+                token=token,
+                kwargs={
+                    "MessageId": server_message_id,
+                    "ContentId": content_id,
+                    "SectionIndex": section_index,
+                    "Contents": chunk,
+                },
+            )
+            section_index += 1
+
+        # Java client sends an explicit terminal section when payload is
+        # an exact multiple of section size.
+        if content and len(content) % _ATTACHMENT_SECTION_SIZE == 0:
+            _call_service_method(
+                svc,
+                "SendAttachmentSection",
+                token=token,
+                kwargs={
+                    "MessageId": server_message_id,
+                    "ContentId": content_id,
+                    "SectionIndex": section_index,
+                },
+            )
+
+    _call_service_method(
+        svc,
+        "CompleteSendMessage",
+        token=token,
+        kwargs={
+            "MessageId": server_message_id,
+            "Envelope": envelope,
+        },
+    )
+    return server_message_id
+
 
 def send_message(
     cfg: EAddressConfig,
@@ -101,35 +282,64 @@ def send_message(
     logger.debug("Built envelope: %s", envelope)
     
     svc = soap_client.service
-    # Handle both real service and callables (stubs)
-    try:
-        if hasattr(svc, "SendMessage"):
-            try:
-                kwargs = {
-                    "Envelope": envelope,
-                    "AttachmentsInput": attachments_input or None,
-                }
-                if token:
-                    kwargs["Token"] = token
-                # Java client does not send ConnectionId in SOAP headers; keep payload aligned.
-                response = svc.SendMessage(**kwargs)
-            except TypeError:
-                # Fallback for simple stubs expecting positional args
-                if connection_id:
-                    response = svc.SendMessage(connection_id, token, envelope) if token else svc.SendMessage(connection_id, envelope)
-                else:
-                    response = svc.SendMessage(token, envelope) if token else svc.SendMessage(envelope)
-        elif callable(svc):
-             response = svc(None, envelope)
-        else:
-             raise EAddressSoapError("Service has no SendMessage method")
-    except Exception as exc:
-        raise EAddressSoapError("VUS SendMessage call failed") from exc
+    if callable(svc) and not hasattr(svc, "SendMessage"):
+        try:
+            response = svc(None, envelope)
+        except Exception as exc:
+            raise EAddressSoapError("VUS SendMessage call failed") from exc
+        return _extract_message_id(response, built_message_id)
 
-    data = serialize_object(response) if response is not None else {}
-    message_id_out = None
-    if isinstance(data, Mapping):
-        message_id_out = data.get("MessageId") or data.get("messageId")
-    if not message_id_out:
-        message_id_out = built_message_id
-    return str(message_id_out)
+    attachment_items_raw = []
+    if isinstance(attachments_input, Mapping):
+        attachment_items_raw = list(attachments_input.get("AttachmentInput") or [])
+
+    parsed_attachment_items: list[dict[str, Any]] = []
+    total_content_size = 0
+    if attachment_items_raw:
+        for index, item in enumerate(attachment_items_raw):
+            if not isinstance(item, Mapping):
+                continue
+            content_id = str(item.get("ContentId", index))
+            if "Contents" in item and item.get("Contents") not in (None, ""):
+                contents_bytes = _decode_contents_field(item.get("Contents"))
+                parsed_attachment_items.append(
+                    {
+                        "index": index,
+                        "content_id": content_id,
+                        "contents_b64": base64.b64encode(contents_bytes).decode("ascii"),
+                        "contents_bytes": contents_bytes,
+                        "size": len(contents_bytes),
+                    }
+                )
+                total_content_size += len(contents_bytes)
+            else:
+                raise EAddressSoapError(
+                    "AttachmentInput without Contents is not supported for large-file send flow; "
+                    "use oaep_cbc mode for encrypted attachment sends."
+                )
+
+    use_chunked_send = total_content_size > _MAX_MESSAGE_FILES_SIZE
+
+    try:
+        if use_chunked_send:
+            return _send_message_chunked(
+                svc,
+                token=token,
+                envelope=envelope,
+                built_message_id=built_message_id,
+                attachment_inputs=parsed_attachment_items,
+            )
+
+        response = _call_service_method(
+            svc,
+            "SendMessage",
+            token=token,
+            kwargs={
+                "Envelope": envelope,
+                "AttachmentsInput": attachments_input or None,
+            },
+        )
+    except Exception as exc:
+        raise EAddressSoapError(f"VUS SendMessage call failed: {exc}") from exc
+
+    return _extract_message_id(response, built_message_id)
