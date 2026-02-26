@@ -212,7 +212,7 @@ class SenderDocumentSigner(Plugin):
         ref = xmlsec.template.add_reference(
             signature, self._digest_transform, uri=f"#{sender_doc.get('Id')}"
         )
-        # Java sidecar digest aligns with exclusive C14N for SenderDocument.
+        # Official Java client digest aligns with exclusive C14N for SenderDocument.
         xmlsec.template.add_transform(ref, xmlsec.Transform.EXCL_C14N)
         signed_props_suffix = f"{uuid.uuid4().int % 100000000:08d}"
         signed_props_id = f"ds-SignedProperties-{signed_props_suffix}"
@@ -284,7 +284,7 @@ class SenderDocumentSigner(Plugin):
 
         _strip_blank_text(signature)
 
-        # No transforms for SignedProperties reference (match Java sidecar output).
+        # No transforms for SignedProperties reference (match official Java output).
 
         def _b64_digest(data: bytes) -> str:
             return base64.b64encode(self._hashlib(data).digest()).decode("ascii")

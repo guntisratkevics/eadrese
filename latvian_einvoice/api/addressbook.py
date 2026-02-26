@@ -4,6 +4,43 @@ from ..errors import EAddressSoapError
 from ..auth import TokenProvider
 from ..soap.client import SoapClient
 
+
+def _root_error_text(exc: Exception) -> str:
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        next_exc = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+        if next_exc is None:
+            break
+        current = next_exc
+    text = str(current or exc).strip()
+    if not text:
+        text = str(exc).strip()
+    return text
+
+
+def _normalize_owner_code(value: str) -> str:
+    text = (value or "").strip()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or text
+
+
+def _is_eaddress(value: str) -> bool:
+    text = (value or "").strip()
+    return bool(text and "@" in text and " " not in text)
+
+
+def _call_search_addressee_unit(service, token: str | None, payload: Mapping[str, Any]):
+    """Try with Token kwarg first (legacy bindings), then without (current DIV binding)."""
+    if token:
+        try:
+            return service.SearchAddresseeUnit(Token=token, **payload)
+        except TypeError:
+            pass
+    return service.SearchAddresseeUnit(**payload)
+
+
 def search_addressee(
     token_provider: TokenProvider,
     soap_client: SoapClient,
@@ -14,23 +51,46 @@ def search_addressee(
     svc = soap_client.service
     
     try:
-        if hasattr(svc, "SearchAddresseeUnit"):
-            # Primary: UnifiedServiceInterface schema (Owner.Code search)
-            payload = {"AddresseeUnitOwner": {"Code": registration_number}}
-            try:
-                if token:
-                    response = svc.SearchAddresseeUnit(Token=token, **payload)
-                else:
-                    response = svc.SearchAddresseeUnit(**payload)
-            except TypeError:
-                # Fallback: some stubs/older clients used RegistrationNumber
-                if token:
-                    response = svc.SearchAddresseeUnit(Token=token, RegistrationNumber=registration_number)
-                else:
-                    response = svc.SearchAddresseeUnit(RegistrationNumber=registration_number)
-        else:
+        if not hasattr(svc, "SearchAddresseeUnit"):
             raise EAddressSoapError("Service has no SearchAddresseeUnit method")
+
+        query = (registration_number or "").strip()
+        owner_code = _normalize_owner_code(query)
+        attempts = []
+        if _is_eaddress(query):
+            attempts.append({"EAddress": query})
+        else:
+            if owner_code:
+                attempts.append({"AddresseeOwnerCode": owner_code})
+            if query and query != owner_code:
+                attempts.append({"AddresseeOwnerCode": query})
+            # Legacy fallback for older stubs/bindings.
+            if owner_code:
+                attempts.append({"AddresseeUnitOwner": {"Code": owner_code}})
+
+        last_type_error = None
+        response = None
+        for payload in attempts:
+            try:
+                response = _call_search_addressee_unit(svc, token, payload)
+                break
+            except TypeError as exc:
+                last_type_error = exc
+                continue
+            except Exception:
+                # Business/authorization faults should not be masked by fallback payloads.
+                raise
+
+        if response is None:
+            if last_type_error is not None:
+                raise last_type_error
+            raise EAddressSoapError("SearchAddresseeUnit call did not accept any known payload variant")
     except Exception as exc:
+         detail = _root_error_text(exc)
+         if detail:
+             raise EAddressSoapError(
+                 f"VUS SearchAddressee call failed for {registration_number}: {detail}"
+             ) from exc
          raise EAddressSoapError(f"VUS SearchAddressee call failed for {registration_number}") from exc
     
     data = serialize_object(response)

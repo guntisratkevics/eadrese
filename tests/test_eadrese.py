@@ -72,6 +72,9 @@ class StubService:
 
     def SearchAddresseeUnit(self, Token=None, AddresseeUnitOwner=None, RegistrationNumber=None, **_kwargs):
         code = None
+        addressee_owner_code = _kwargs.get("AddresseeOwnerCode")
+        if addressee_owner_code:
+            code = addressee_owner_code
         if isinstance(AddresseeUnitOwner, dict):
             code = AddresseeUnitOwner.get("Code")
         if not code:
@@ -210,4 +213,3 @@ def test_eadrese_auth_error():
         assert False, f"Raised wrong exception type: {type(e)}"
     else:
         assert False, "Should have raised EAddressAuthError"
-

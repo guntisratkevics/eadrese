@@ -29,7 +29,7 @@ def build_envelope(
     symmetric_iv_bytes: Optional[bytes] = None,
     encryption_mode: str = "gcm",
 ) -> tuple[Mapping[str, object], Sequence[Mapping[str, object]] | None, str]:
-    """Builds a minimal DIV EnvelopeStructure equivalent to the Java sidecar."""
+    """Builds a minimal DIV EnvelopeStructure equivalent to the official Java client."""
     now = _dt.datetime.now(tz=tz_riga())
     message_id = uuid.uuid4().hex
     sender_doc_id = "SenderSection"
