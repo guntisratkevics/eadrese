@@ -31,6 +31,26 @@ final class Crypto
         return [$encKey, $thumb, $key, $iv];
     }
 
+    public static function encryptKeyOaepSha1FromModExp(
+        string $modulusB64,
+        string $exponentB64,
+        string $keyBytes
+    ): string {
+        $pem = self::rsaPublicKeyPemFromModExp($modulusB64, $exponentB64);
+        return self::encryptKeyOaepSha1($pem, $keyBytes);
+    }
+
+    public static function buildDivKeyBlob(string $key, string $iv): string
+    {
+        if (!in_array(strlen($key), [16, 24, 32], true)) {
+            throw new \RuntimeException('Unsupported AES key length');
+        }
+        if (strlen($iv) !== 16) {
+            throw new \RuntimeException('Invalid IV length');
+        }
+        return chr(strlen($key)) . $key . $iv;
+    }
+
     public static function encryptKeyPkcs1v15(string $certPem, string $keyBytes): string
     {
         $pub = openssl_pkey_get_public($certPem);
@@ -152,15 +172,96 @@ final class Crypto
         return self::pkcs7Unpad($pt, 16);
     }
 
-    private static function buildDivKeyBlob(string $key, string $iv): string
+    private static function rsaPublicKeyPemFromModExp(string $modulusB64, string $exponentB64): string
     {
-        if (!in_array(strlen($key), [16, 24, 32], true)) {
-            throw new \RuntimeException('Unsupported AES key length');
+        $modulus = base64_decode(trim($modulusB64), true);
+        $exponent = base64_decode(trim($exponentB64), true);
+        if (!is_string($modulus) || $modulus === '' || !is_string($exponent) || $exponent === '') {
+            throw new \RuntimeException('Invalid RSA modulus/exponent encoding');
         }
-        if (strlen($iv) !== 16) {
-            throw new \RuntimeException('Invalid IV length');
+
+        $rsaPublicKey = self::derEncodeSequence(
+            self::derEncodeInteger($modulus) .
+            self::derEncodeInteger($exponent)
+        );
+        $algorithmId = self::derEncodeSequence(
+            self::derEncodeOid('1.2.840.113549.1.1.1') .
+            self::derEncodeNull()
+        );
+        $subjectPublicKeyInfo = self::derEncodeSequence(
+            $algorithmId .
+            self::derEncodeBitString($rsaPublicKey)
+        );
+
+        return "-----BEGIN PUBLIC KEY-----\n"
+            . chunk_split(base64_encode($subjectPublicKeyInfo), 64, "\n")
+            . "-----END PUBLIC KEY-----\n";
+    }
+
+    private static function derEncodeInteger(string $bytes): string
+    {
+        $bytes = ltrim($bytes, "\x00");
+        if ($bytes === '') {
+            $bytes = "\x00";
         }
-        return chr(strlen($key)) . $key . $iv;
+        if ((ord($bytes[0]) & 0x80) !== 0) {
+            $bytes = "\x00" . $bytes;
+        }
+        return "\x02" . self::derEncodeLength(strlen($bytes)) . $bytes;
+    }
+
+    private static function derEncodeSequence(string $content): string
+    {
+        return "\x30" . self::derEncodeLength(strlen($content)) . $content;
+    }
+
+    private static function derEncodeBitString(string $bytes): string
+    {
+        $content = "\x00" . $bytes;
+        return "\x03" . self::derEncodeLength(strlen($content)) . $content;
+    }
+
+    private static function derEncodeNull(): string
+    {
+        return "\x05\x00";
+    }
+
+    private static function derEncodeOid(string $oid): string
+    {
+        $parts = array_map('intval', explode('.', $oid));
+        if (count($parts) < 2) {
+            throw new \RuntimeException('Invalid OID');
+        }
+        $first = array_shift($parts);
+        $second = array_shift($parts);
+        $encoded = chr($first * 40 + $second);
+        foreach ($parts as $part) {
+            if ($part < 0) {
+                throw new \RuntimeException('Invalid OID part');
+            }
+            $stack = [chr($part & 0x7F)];
+            $part >>= 7;
+            while ($part > 0) {
+                array_unshift($stack, chr(($part & 0x7F) | 0x80));
+                $part >>= 7;
+            }
+            $encoded .= implode('', $stack);
+        }
+        return "\x06" . self::derEncodeLength(strlen($encoded)) . $encoded;
+    }
+
+    private static function derEncodeLength(int $length): string
+    {
+        if ($length < 0x80) {
+            return chr($length);
+        }
+        $bytes = '';
+        $value = $length;
+        while ($value > 0) {
+            $bytes = chr($value & 0xFF) . $bytes;
+            $value >>= 8;
+        }
+        return chr(0x80 | strlen($bytes)) . $bytes;
     }
 
     private static function pkcs7Pad(string $data, int $blockSize): string

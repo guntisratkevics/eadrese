@@ -7,6 +7,7 @@ namespace LatvianEinvoice;
 use LatvianEinvoice\Envelope\Builder;
 use LatvianEinvoice\Soap\DirectSoapClient;
 use LatvianEinvoice\Soap\DivMessageDecoder;
+use LatvianEinvoice\Utils\Crypto;
 
 final class Client
 {
@@ -36,9 +37,11 @@ final class Client
         bool $notifySenderOnDelivery = false,
         ?string $encryptionMode = null
     ): array {
+        $normalizedRecipients = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
+
         return Builder::buildEnvelope(
             $this->config->defaultFrom,
-            $recipients,
+            $normalizedRecipients,
             $documentKindCode,
             $subject,
             $bodyText,
@@ -164,6 +167,212 @@ final class Client
     }
 
     /**
+     * Direct SOAP GetMessageList + first message fetch convenience (PHP equivalent of Python get_next_message()).
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, confirmed?:bool, confirm_error?:string}|null
+     */
+    public function getNextMessageSoap(
+        bool $includeAttachments = true,
+        bool $stitchSections = true,
+        bool $decrypt = true,
+        bool $autoConfirm = false
+    ): ?array {
+        $list = $this->getMessageListSoap(10);
+        $listBody = is_array($list['body'] ?? null) ? $list['body'] : null;
+        $headers = is_array($listBody['MessageHeaders'] ?? null) ? $listBody['MessageHeaders'] : [];
+        $first = (isset($headers[0]) && is_array($headers[0])) ? $headers[0] : null;
+        $messageId = trim((string)($first['MessageId'] ?? ''));
+        if ($messageId === '') {
+            return null;
+        }
+
+        $result = $this->getMessageDecodedSoap(
+            $messageId,
+            $includeAttachments && $stitchSections,
+            $includeAttachments && $decrypt
+        );
+
+        if ($autoConfirm) {
+            $confirm = $this->confirmMessageSoap($messageId);
+            $confirmBody = is_array($confirm['body'] ?? null) ? $confirm['body'] : null;
+            $hasFault = is_array($confirmBody) && array_key_exists('Fault', $confirmBody);
+            $result['confirmed'] = !$hasFault;
+            if ($hasFault) {
+                $result['confirm_error'] = self::faultText($confirmBody);
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Direct SOAP SearchAddresseeUnit.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, results:list<array<string,mixed>>}
+     */
+    public function searchAddresseeSoap(string $registrationNumber): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->searchAddresseeUnit($registrationNumber);
+    }
+
+    /**
+     * Direct SOAP GetPublicKeyList.
+     *
+     * @param string[] $recipients
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, keys:list<array<string,mixed>>}
+     */
+    public function getPublicKeyListSoap(array $recipients): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getPublicKeyList($recipients);
+    }
+
+    /**
+     * Direct SOAP GetNotificationList.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getNotificationListSoap(int $maxResultCount = 50): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getNotificationList($maxResultCount);
+    }
+
+    /**
+     * Direct SOAP ConfirmNotificationList.
+     *
+     * @param int[] $notificationIds
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, confirmed_ids:list<int>}
+     */
+    public function confirmNotificationListSoap(array $notificationIds): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->confirmNotificationList($notificationIds);
+    }
+
+    /**
+     * Poll notifications with paging + optional auto-confirm behavior (Odoo parity helper).
+     *
+     * @return array{items:list<array<string,mixed>>,has_more_data:bool,confirmed_ids:list<int>}
+     */
+    public function pollNotificationsSoap(int $maxItems = 50, bool $autoConfirm = true): array
+    {
+        $limit = max(min($maxItems, 200), 1);
+        $items = [];
+        $confirmedIds = [];
+        $hasMoreData = false;
+        $seenNotificationIds = [];
+        $remaining = $limit;
+
+        while ($remaining > 0) {
+            $response = $this->getNotificationListSoap($remaining);
+            $body = is_array($response['body'] ?? null) ? $response['body'] : [];
+            if (array_key_exists('Fault', $body)) {
+                throw new \RuntimeException('GetNotificationList failed: ' . self::faultText($body));
+            }
+
+            $batch = self::extractNotificationItems($body);
+            $hasMoreData = (bool)($body['HasMoreData'] ?? false);
+            if (empty($batch)) {
+                break;
+            }
+
+            $batchIds = [];
+            $filteredBatch = [];
+            foreach ($batch as $notification) {
+                $notificationId = self::toInt($notification['id'] ?? null);
+                if ($notificationId !== null) {
+                    if (isset($seenNotificationIds[$notificationId])) {
+                        continue;
+                    }
+                    $seenNotificationIds[$notificationId] = true;
+                    $batchIds[] = $notificationId;
+                }
+                $filteredBatch[] = $notification;
+            }
+
+            if (empty($filteredBatch)) {
+                break;
+            }
+
+            $items = array_merge($items, $filteredBatch);
+            $remaining = $limit - count($items);
+
+            if ($autoConfirm && !empty($batchIds)) {
+                $confirm = $this->confirmNotificationListSoap($batchIds);
+                $confirmBody = is_array($confirm['body'] ?? null) ? $confirm['body'] : [];
+                if (array_key_exists('Fault', $confirmBody)) {
+                    break;
+                }
+                foreach (($confirm['confirmed_ids'] ?? []) as $confirmedId) {
+                    $id = self::toInt($confirmedId);
+                    if ($id !== null) {
+                        $confirmedIds[$id] = $id;
+                    }
+                }
+            }
+
+            if (!$hasMoreData || $remaining <= 0) {
+                break;
+            }
+        }
+
+        return [
+            'items' => array_slice($items, 0, $limit),
+            'has_more_data' => $hasMoreData,
+            'confirmed_ids' => array_values($confirmedIds),
+        ];
+    }
+
+    /**
+     * Certificate/connectivity validation helper (mirrors Odoo cert_status behavior).
+     *
+     * @param string[] $lookupValues
+     * @return array{status:string,message:string,lookup_value?:string,attempted_values:array<int,string>,errors?:array<int,string>}
+     */
+    public function certValidateSoap(array $lookupValues): array
+    {
+        $attemptedValues = [];
+        $errors = [];
+
+        foreach ($lookupValues as $rawValue) {
+            $value = trim((string)$rawValue);
+            if ($value === '' || in_array($value, $attemptedValues, true)) {
+                continue;
+            }
+            $attemptedValues[] = $value;
+            try {
+                $response = $this->searchAddresseeSoap($value);
+                $body = is_array($response['body'] ?? null) ? $response['body'] : [];
+                if (array_key_exists('Fault', $body)) {
+                    $errors[] = $value . ': ' . self::faultText($body);
+                    continue;
+                }
+                $results = is_array($response['results'] ?? null) ? $response['results'] : [];
+                if (!empty($results)) {
+                    return [
+                        'status' => 'ok',
+                        'message' => 'Certificate valid and connectivity working.',
+                        'lookup_value' => $value,
+                        'attempted_values' => $attemptedValues,
+                    ];
+                }
+                $errors[] = $value . ': no results';
+            } catch (\Throwable $exc) {
+                $errors[] = $value . ': ' . (trim($exc->getMessage()) !== '' ? $exc->getMessage() : $exc::class);
+            }
+        }
+
+        $message = !empty($errors) ? $errors[0] : 'Certificate validation lookup failed.';
+        return [
+            'status' => 'error',
+            'message' => $message,
+            'attempted_values' => $attemptedValues,
+            'errors' => $errors,
+        ];
+    }
+
+    /**
      * Direct SOAP SendMessage using Envelope\Builder output.
      *
      * @param string[] $recipients
@@ -182,21 +391,59 @@ final class Client
         ?string $symmetricIvBytes = null,
         ?string $traceText = 'Created',
         bool $notifySenderOnDelivery = false,
-        ?string $encryptionMode = null
+        ?string $encryptionMode = null,
+        ?string $recipientCertPath = null,
+        ?string $recipientCertPem = null,
+        ?string $recipientPublicKeyModulusB64 = null,
+        ?string $recipientPublicKeyExponentB64 = null
     ): array {
+        $mode = strtolower(trim((string)($encryptionMode ?? $this->config->encryptionMode ?: 'gcm')));
+        $encryptionKey = $encryptionKeyB64;
+        $thumbprint = $recipientThumbprintB64;
+        $symmetricKey = $symmetricKeyBytes;
+        $symmetricIv = $symmetricIvBytes;
+
+        $modulusB64 = trim((string)($recipientPublicKeyModulusB64 ?? ''));
+        $exponentB64 = trim((string)($recipientPublicKeyExponentB64 ?? ''));
+        if ($modulusB64 !== '' && $exponentB64 !== '') {
+            if (trim((string)$thumbprint) === '') {
+                throw new \RuntimeException(
+                    'recipientThumbprintB64 is required when recipientPublicKeyModulusB64/ExponentB64 are provided'
+                );
+            }
+            if (!in_array($mode, ['oaep_cbc', 'cbc'], true)) {
+                throw new \RuntimeException('recipient public key modulus/exponent flow requires oaep_cbc mode');
+            }
+            $symmetricKey = $symmetricKey ?? random_bytes(32);
+            $symmetricIv = $symmetricIv ?? random_bytes(16);
+            $keyBlob = Crypto::buildDivKeyBlob($symmetricKey, $symmetricIv);
+            $encryptionKey = Crypto::encryptKeyOaepSha1FromModExp($modulusB64, $exponentB64, $keyBlob);
+        } else {
+            $certPem = self::resolveRecipientCertPem($recipientCertPath, $recipientCertPem);
+            if ($certPem !== null) {
+                if (in_array($mode, ['oaep_cbc', 'cbc'], true)) {
+                    [$encryptionKey, $thumbprint, $symmetricKey, $symmetricIv] =
+                        Crypto::deriveEncryptionFieldsOaepCbc($certPem, $symmetricKey, $symmetricIv);
+                } else {
+                    [$encryptionKey, $thumbprint, $symmetricKey] =
+                        Crypto::deriveEncryptionFields($certPem, $symmetricKey);
+                }
+            }
+        }
+
         [$envelope, $attachmentsInput, $messageId] = $this->buildEnvelope(
             $recipients,
             $documentKindCode,
             $subject,
             $bodyText,
             $attachments,
-            $encryptionKeyB64,
-            $recipientThumbprintB64,
-            $symmetricKeyBytes,
-            $symmetricIvBytes,
+            $encryptionKey,
+            $thumbprint,
+            $symmetricKey,
+            $symmetricIv,
             $traceText,
             $notifySenderOnDelivery,
-            $encryptionMode
+            $mode
         );
 
         $soap = new DirectSoapClient($this->config);
@@ -205,5 +452,168 @@ final class Client
             is_array($attachmentsInput) ? $attachmentsInput : null,
             $messageId
         );
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<int,array<string,mixed>>
+     */
+    private static function extractNotificationItems(array $body): array
+    {
+        $notifications = $body['Notifications'] ?? null;
+        if (is_array($notifications)) {
+            $notifications = $notifications['Notification'] ?? $notifications;
+        }
+        if (!is_array($notifications)) {
+            return [];
+        }
+        if (isset($notifications['Id']) || isset($notifications['MessageId'])) {
+            $notifications = [$notifications];
+        }
+
+        $items = [];
+        foreach ($notifications as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $recipients = self::normalizeRecipientStrings($row['Recipients'] ?? null);
+            $items[] = [
+                'id' => $row['Id'] ?? null,
+                'type' => $row['Type'] ?? null,
+                'created_on' => $row['CreatedOn'] ?? null,
+                'message_id' => $row['MessageId'] ?? null,
+                'message_client_id' => $row['MessageClientId'] ?? null,
+                'message_status' => $row['MessageStatus'] ?? null,
+                'status_code' => $row['StatusCode'] ?? null,
+                'status_text' => $row['StatusText'] ?? null,
+                'sender' => $row['Sender'] ?? null,
+                'recipients' => $recipients,
+            ];
+        }
+        return $items;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function normalizeRecipientStrings(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $rawRecipients = $value['string'] ?? $value;
+        if (is_string($rawRecipients)) {
+            $rawRecipients = [$rawRecipients];
+        }
+        if (!is_array($rawRecipients)) {
+            return [];
+        }
+
+        $recipients = [];
+        foreach ($rawRecipients as $recipient) {
+            if (!is_string($recipient) && !is_int($recipient) && !is_float($recipient)) {
+                continue;
+            }
+            $text = trim((string)$recipient);
+            if ($text !== '') {
+                $recipients[] = $text;
+            }
+        }
+        return $recipients;
+    }
+
+    private static function toInt(mixed $value): ?int
+    {
+        if (!is_string($value) && !is_int($value) && !is_float($value)) {
+            return null;
+        }
+        $text = trim((string)$value);
+        if ($text === '' || !preg_match('/^-?\d+$/', $text)) {
+            return null;
+        }
+        return (int)$text;
+    }
+
+    /**
+     * @param array<string,mixed>|null $body
+     */
+    private static function faultText(?array $body): string
+    {
+        if (!is_array($body)) {
+            return 'Unknown SOAP fault';
+        }
+        $fault = is_array($body['Fault'] ?? null) ? $body['Fault'] : [];
+        $parts = [];
+        foreach (['Code', 'Reason', 'Detail'] as $key) {
+            $value = trim((string)($fault[$key] ?? ''));
+            if ($value !== '') {
+                $parts[] = $value;
+            }
+        }
+        return !empty($parts) ? implode(' | ', $parts) : 'Unknown SOAP fault';
+    }
+
+    /**
+     * @param string[] $recipients
+     * @return string[]
+     */
+    private function normalizeRecipientsForSend(array $recipients, string $documentKindCode): array
+    {
+        $normalized = [];
+        foreach ($recipients as $recipient) {
+            $value = trim((string)$recipient);
+            if ($value !== '' && !in_array($value, $normalized, true)) {
+                $normalized[] = $value;
+            }
+        }
+
+        if (empty($normalized)) {
+            $fallback = trim((string)$this->config->defaultTo);
+            if ($fallback !== '') {
+                $normalized[] = $fallback;
+            }
+        }
+
+        if (
+            $this->config->vidSubaddressAuto
+            && strtoupper(trim($documentKindCode)) === 'EINVOICE'
+        ) {
+            $vid = trim((string)($this->config->vidSubaddress ?? ''));
+            if ($vid === '') {
+                $vid = $this->deriveDefaultVidSubaddress();
+            }
+            if ($vid !== '' && !in_array($vid, $normalized, true)) {
+                $normalized[] = $vid;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function deriveDefaultVidSubaddress(): string
+    {
+        $wsdl = strtolower(trim((string)$this->config->wsdlUrl));
+        $token = strtolower(trim((string)$this->config->tokenUrl));
+        $isTest = str_contains($wsdl, 'divtest') || str_contains($token, 'divtest');
+        return $isTest ? 'VID_EREKINI_TEST@90000069281' : 'VID_EREKINI_PROD@90000069281';
+    }
+
+    private static function resolveRecipientCertPem(?string $recipientCertPath, ?string $recipientCertPem): ?string
+    {
+        $inlinePem = trim((string)($recipientCertPem ?? ''));
+        if ($inlinePem !== '') {
+            return $inlinePem;
+        }
+
+        $path = trim((string)($recipientCertPath ?? ''));
+        if ($path === '') {
+            return null;
+        }
+
+        $pem = @file_get_contents($path);
+        if (!is_string($pem) || trim($pem) === '') {
+            throw new \RuntimeException('Failed to read recipient certificate PEM from path: ' . $path);
+        }
+        return $pem;
     }
 }

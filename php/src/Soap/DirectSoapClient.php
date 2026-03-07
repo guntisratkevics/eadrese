@@ -13,6 +13,7 @@ final class DirectSoapClient
     private const NS_DIV = 'http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0';
     private const NS_ADDR = 'http://ivis.eps.gov.lv/XMLSchemas/100001/Address/v1-1';
     private const NS_DS = 'http://www.w3.org/2000/09/xmldsig#';
+    private const NS_ARRAYS = 'http://schemas.microsoft.com/2003/10/Serialization/Arrays';
 
     private const ACTION_SEND_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/SendMessage';
     private const ACTION_INIT_SEND_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/InitSendMessage';
@@ -22,6 +23,10 @@ final class DirectSoapClient
     private const ACTION_GET_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetMessage';
     private const ACTION_GET_ATTACHMENT_SECTION = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetAttachmentSection';
     private const ACTION_CONFIRM_MESSAGE = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/ConfirmMessage';
+    private const ACTION_SEARCH_ADDRESSEE_UNIT = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/SearchAddresseeUnit';
+    private const ACTION_GET_PUBLIC_KEY_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetPublicKeyList';
+    private const ACTION_GET_NOTIFICATION_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetNotificationList';
+    private const ACTION_CONFIRM_NOTIFICATION_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/ConfirmNotificationList';
     private const MAX_MESSAGE_FILES_SIZE = 0x400000; // 4 MiB
     private const ATTACHMENT_SECTION_SIZE = 0x400000; // 4 MiB
 
@@ -213,6 +218,252 @@ final class DirectSoapClient
             'body' => $parsed,
             'raw' => $raw,
             'request_xml' => $requestXml,
+        ];
+    }
+
+    /**
+     * Direct SOAP SearchAddresseeUnit (mTLS + WSSE).
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, results:list<array<string,mixed>>}
+     */
+    public function searchAddresseeUnit(string $query): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+        $query = trim($query);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'SearchAddresseeUnitInput');
+        if (self::looksLikeEAddress($query)) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'EAddress', $query));
+        } else {
+            $ownerCode = self::normalizeOwnerCode($query);
+            $input->appendChild(
+                $doc->createElementNS(self::NS_UUI, 'AddresseeOwnerCode', $ownerCode !== '' ? $ownerCode : $query)
+            );
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_SEARCH_ADDRESSEE_UNIT);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'results' => [],
+            ];
+        }
+
+        $parsed = self::tryParseSearchAddresseeUnitResponse($raw);
+        $results = is_array($parsed['AddresseeUnits'] ?? null) ? $parsed['AddresseeUnits'] : [];
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'results' => $results,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetPublicKeyList (mTLS + WSSE).
+     *
+     * @param string[] $recipients
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, keys:list<array<string,mixed>>}
+     */
+    public function getPublicKeyList(array $recipients): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'GetPublicKeyListInput');
+        $recipientsEl = $doc->createElementNS(self::NS_UUI, 'Recipients');
+        foreach ($recipients as $recipient) {
+            $value = trim((string)$recipient);
+            if ($value === '') {
+                continue;
+            }
+            $recipientsEl->appendChild($doc->createElementNS(self::NS_ARRAYS, 'string', $value));
+        }
+        $input->appendChild($recipientsEl);
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_PUBLIC_KEY_LIST);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'keys' => [],
+            ];
+        }
+
+        $parsed = self::tryParseGetPublicKeyListResponse($raw);
+        $keys = is_array($parsed['PublicKeys'] ?? null) ? $parsed['PublicKeys'] : [];
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'keys' => $keys,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetNotificationList (mTLS + WSSE).
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getNotificationList(int $maxResultCount = 50): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'GetNotificationListInput');
+        if ($maxResultCount > 0) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'MaxResultCount', (string)$maxResultCount));
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_NOTIFICATION_LIST);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+            ];
+        }
+
+        $parsed = self::tryParseGetNotificationListResponse($raw);
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+        ];
+    }
+
+    /**
+     * Direct SOAP ConfirmNotificationList (mTLS + WSSE).
+     *
+     * @param int[] $notificationIds
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, confirmed_ids:list<int>}
+     */
+    public function confirmNotificationList(array $notificationIds): array
+    {
+        $normalizedIds = self::normalizePositiveInts($notificationIds);
+        if (empty($normalizedIds)) {
+            return [
+                'status' => 200,
+                'body' => ['ConfirmedIds' => []],
+                'raw' => '',
+                'request_xml' => '',
+                'confirmed_ids' => [],
+            ];
+        }
+
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'ConfirmNotificationListInput');
+        $idsEl = $doc->createElementNS(self::NS_UUI, 'NotificationIds');
+        foreach ($normalizedIds as $notificationId) {
+            $idsEl->appendChild($doc->createElementNS(self::NS_ARRAYS, 'long', (string)$notificationId));
+        }
+        $input->appendChild($idsEl);
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_CONFIRM_NOTIFICATION_LIST);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'confirmed_ids' => [],
+            ];
+        }
+
+        return [
+            'status' => $status,
+            'body' => ['ConfirmedIds' => $normalizedIds],
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'confirmed_ids' => $normalizedIds,
         ];
     }
 
@@ -1433,6 +1684,112 @@ final class DirectSoapClient
         ];
     }
 
+    private static function tryParseSearchAddresseeUnitResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $unitNodes = $xpath->query(
+            '//*[local-name()="SearchAddresseeUnitOutput"]//*[local-name()="AddresseeUnit"]'
+        );
+        if (!$unitNodes || $unitNodes->length === 0) {
+            $unitNodes = $xpath->query('//*[local-name()="AddresseeUnit"]');
+        }
+
+        $units = [];
+        if ($unitNodes) {
+            foreach ($unitNodes as $unitNode) {
+                if (!$unitNode instanceof \DOMElement) {
+                    continue;
+                }
+                $units[] = self::directChildrenMap($unitNode);
+            }
+        }
+
+        return ['AddresseeUnits' => $units];
+    }
+
+    private static function tryParseGetPublicKeyListResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $keyNodes = $xpath->query(
+            '//*[local-name()="GetPublicKeyListOutput"]//*[local-name()="RecipientPublicKey"]'
+        );
+        if (!$keyNodes || $keyNodes->length === 0) {
+            $keyNodes = $xpath->query('//*[local-name()="RecipientPublicKey"]');
+        }
+
+        $keys = [];
+        if ($keyNodes) {
+            foreach ($keyNodes as $keyNode) {
+                if (!$keyNode instanceof \DOMElement) {
+                    continue;
+                }
+                $keys[] = self::directChildrenMap($keyNode);
+            }
+        }
+
+        return ['PublicKeys' => $keys];
+    }
+
+    private static function tryParseGetNotificationListResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $notificationNodes = $xpath->query(
+            '//*[local-name()="GetNotificationListOutput"]//*[local-name()="Notification"]'
+        );
+        if (!$notificationNodes || $notificationNodes->length === 0) {
+            $notificationNodes = $xpath->query('//*[local-name()="Notification"]');
+        }
+
+        $notifications = [];
+        if ($notificationNodes) {
+            foreach ($notificationNodes as $notificationNode) {
+                if (!$notificationNode instanceof \DOMElement) {
+                    continue;
+                }
+                $row = self::directChildrenMap($notificationNode);
+                unset($row['Recipients']);
+                $recipientNodes = $xpath->query('./*[local-name()="Recipients"]/*[local-name()="string"]', $notificationNode);
+                $recipients = [];
+                if ($recipientNodes) {
+                    foreach ($recipientNodes as $recipientNode) {
+                        $value = trim((string)$recipientNode->textContent);
+                        if ($value !== '') {
+                            $recipients[] = $value;
+                        }
+                    }
+                }
+                if (!empty($recipients)) {
+                    $row['Recipients'] = ['string' => $recipients];
+                }
+                $notifications[] = $row;
+            }
+        }
+
+        $hasMore = self::xmlBoolOrNull(
+            trim((string)$xpath->evaluate('string(//*[local-name()="HasMoreData"][1])'))
+        );
+
+        return [
+            'Notifications' => ['Notification' => $notifications],
+            'HasMoreData' => $hasMore,
+        ];
+    }
+
     private static function tryParseGetAttachmentSectionResponse(string $raw): ?array
     {
         [$soapXml, $parts] = self::extractSoapXmlAndParts($raw);
@@ -1697,6 +2054,82 @@ final class DirectSoapClient
             'soap_xml' => $soapXml,
             'parts' => $parts,
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function directChildrenMap(\DOMElement $element): array
+    {
+        $row = [];
+        foreach ($element->childNodes as $child) {
+            if (!$child instanceof \DOMElement) {
+                continue;
+            }
+            $name = $child->localName ?: $child->nodeName;
+            $value = trim((string)$child->textContent);
+            if ($value === '') {
+                continue;
+            }
+            if (array_key_exists($name, $row)) {
+                if (!is_array($row[$name])) {
+                    $row[$name] = [$row[$name]];
+                }
+                $row[$name][] = $value;
+                continue;
+            }
+            $row[$name] = $value;
+        }
+        return $row;
+    }
+
+    private static function xmlBoolOrNull(string $value): ?bool
+    {
+        $value = strtolower(trim($value));
+        if ($value === 'true') {
+            return true;
+        }
+        if ($value === 'false') {
+            return false;
+        }
+        return null;
+    }
+
+    private static function normalizeOwnerCode(string $value): string
+    {
+        $value = trim($value);
+        $digits = preg_replace('/\D+/', '', $value) ?? '';
+        return $digits !== '' ? $digits : $value;
+    }
+
+    private static function looksLikeEAddress(string $value): bool
+    {
+        $value = trim($value);
+        return $value !== '' && str_contains($value, '@') && !str_contains($value, ' ');
+    }
+
+    /**
+     * @param int[] $values
+     * @return int[]
+     */
+    private static function normalizePositiveInts(array $values): array
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            if (!is_int($value) && !is_string($value) && !is_float($value)) {
+                continue;
+            }
+            $text = trim((string)$value);
+            if ($text === '' || !preg_match('/^-?\d+$/', $text)) {
+                continue;
+            }
+            $id = (int)$text;
+            if ($id <= 0) {
+                continue;
+            }
+            $normalized[$id] = $id;
+        }
+        return array_values($normalized);
     }
 
     private static function normalizeContentId(string $value): string
