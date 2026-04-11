@@ -29,6 +29,11 @@ final class DirectSoapClient
     private const ACTION_GET_PUBLIC_KEY_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetPublicKeyList';
     private const ACTION_GET_NOTIFICATION_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetNotificationList';
     private const ACTION_CONFIRM_NOTIFICATION_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/ConfirmNotificationList';
+    private const ACTION_GET_INITIAL_ADDRESSEE_RECORD_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetInitialAddresseeRecordList';
+    private const ACTION_GET_CHANGED_ADDRESSEE_RECORD_LIST = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetChangedAddresseeRecordList';
+    private const ACTION_VALIDATE_EADDRESS = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/ValidateEAddress';
+    private const ACTION_GET_ADDRESSEE_UNIT = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetAddresseeUnit';
+    private const ACTION_GET_MESSAGE_SERVER_CONFIRMATION = 'http://vraa.gov.lv/div/uui/2011/11/UnifiedServiceInterface/GetMessageServerConfirmation';
     private const MAX_MESSAGE_FILES_SIZE = 0x400000; // 4 MiB
     private const ATTACHMENT_SECTION_SIZE = 0x400000; // 4 MiB
 
@@ -466,6 +471,354 @@ final class DirectSoapClient
             'raw' => $raw,
             'request_xml' => $requestXml,
             'confirmed_ids' => $normalizedIds,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetInitialAddresseeRecordList (mTLS + WSSE).
+     *
+     * Fetches all addressee records from the VRAA directory (full initial sync).
+     * Paginates automatically using the ContinuationToken until all pages are retrieved,
+     * or stops at the page identified by $continuationToken if provided for manual paging.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, records:list<array<string,mixed>>, continuation_token:string|null}
+     */
+    public function getInitialAddresseeRecordList(?string $continuationToken = null, bool $allPages = true): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+        $allRecords = [];
+        $lastStatus = 200;
+        $lastRaw = '';
+        $lastRequestXml = '';
+        $lastBody = null;
+        $currentToken = $continuationToken;
+
+        do {
+            $doc = new \DOMDocument('1.0', 'utf-8');
+            $doc->formatOutput = false;
+            $doc->preserveWhiteSpace = false;
+
+            $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+            $doc->appendChild($env);
+            $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+            $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+            $env->appendChild($header);
+            $env->appendChild($body);
+
+            $input = $doc->createElementNS(self::NS_UUI, 'GetInitialAddresseeRecordListInput');
+            if ($currentToken !== null && $currentToken !== '') {
+                $input->appendChild($doc->createElementNS(self::NS_UUI, 'Token', $currentToken));
+            }
+            $body->appendChild($input);
+
+            WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_INITIAL_ADDRESSEE_RECORD_LIST);
+
+            $requestXml = $doc->saveXML();
+            if ($requestXml === false) {
+                throw new \RuntimeException('Failed to serialize SOAP XML');
+            }
+
+            [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+            $lastStatus = $status;
+            $lastRaw = $raw;
+            $lastRequestXml = $requestXml;
+
+            $faultOrNull = self::tryParseSoapResponse($raw);
+            if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+                return [
+                    'status' => $status,
+                    'body' => $faultOrNull,
+                    'raw' => $raw,
+                    'request_xml' => $requestXml,
+                    'records' => $allRecords,
+                    'continuation_token' => $currentToken,
+                ];
+            }
+
+            $parsed = self::tryParseAddresseeRecordListResponse($raw, 'GetInitialAddresseeRecordListOutput');
+            $lastBody = $parsed;
+            $pageRecords = is_array($parsed['AddresseeRecords'] ?? null) ? $parsed['AddresseeRecords'] : [];
+            $allRecords = array_merge($allRecords, $pageRecords);
+            $nextToken = isset($parsed['ContinuationToken']) && $parsed['ContinuationToken'] !== '' && $parsed['ContinuationToken'] !== null
+                ? (string)$parsed['ContinuationToken']
+                : null;
+            $currentToken = $nextToken;
+
+            // If caller passed an explicit token, do only one page.
+            if ($continuationToken !== null) {
+                break;
+            }
+        } while ($allPages && $currentToken !== null);
+
+        return [
+            'status' => $lastStatus,
+            'body' => $lastBody,
+            'raw' => $lastRaw,
+            'request_xml' => $lastRequestXml,
+            'records' => $allRecords,
+            'continuation_token' => $currentToken,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetChangedAddresseeRecordList (mTLS + WSSE).
+     *
+     * Fetches addressee records changed since the given version number (incremental sync).
+     * $lastVersion = 0 returns all changes; use the highest Version from a previous sync.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, records:list<array<string,mixed>>, has_more_data:bool}
+     */
+    public function getChangedAddresseeRecordList(int $lastVersion = 0): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'GetChangedAddresseeRecordListInput');
+        if ($lastVersion >= 0) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'LastVersion', (string)$lastVersion));
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_CHANGED_ADDRESSEE_RECORD_LIST);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'records' => [],
+                'has_more_data' => false,
+            ];
+        }
+
+        $parsed = self::tryParseAddresseeRecordListResponse($raw, 'GetChangedAddresseeRecordListOutput');
+        $records = is_array($parsed['AddresseeRecords'] ?? null) ? $parsed['AddresseeRecords'] : [];
+        $hasMore = (bool)($parsed['HasMoreData'] ?? false);
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'records' => $records,
+            'has_more_data' => $hasMore,
+        ];
+    }
+
+    /**
+     * Direct SOAP ValidateEAddress (mTLS + WSSE).
+     *
+     * Validates whether one or more e-addresses exist and are active in the VRAA directory.
+     * $type: null (no filter), 'NaturalPerson', or 'RegisteredEntity'.
+     *
+     * @param string[] $eAddresses
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, results:list<array<string,mixed>>}
+     */
+    public function validateEAddress(array $eAddresses, ?string $type = null): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+
+        $normalized = [];
+        foreach ($eAddresses as $addr) {
+            $v = trim((string)$addr);
+            if ($v !== '') {
+                $normalized[] = $v;
+            }
+        }
+        if (empty($normalized)) {
+            return [
+                'status' => 200,
+                'body' => ['Results' => []],
+                'raw' => '',
+                'request_xml' => '',
+                'results' => [],
+            ];
+        }
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'ValidateEAddressInput');
+        $eAddressesEl = $doc->createElementNS(self::NS_UUI, 'EAddresses');
+        foreach ($normalized as $addr) {
+            $eAddressesEl->appendChild($doc->createElementNS(self::NS_ARRAYS, 'string', $addr));
+        }
+        $input->appendChild($eAddressesEl);
+        if ($type !== null && in_array($type, ['NaturalPerson', 'RegisteredEntity'], true)) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'Type', $type));
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_VALIDATE_EADDRESS);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'results' => [],
+            ];
+        }
+
+        $parsed = self::tryParseValidateEAddressResponse($raw);
+        $results = is_array($parsed['Results'] ?? null) ? $parsed['Results'] : [];
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'results' => $results,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetAddresseeUnit (mTLS + WSSE).
+     *
+     * Fetches full unit metadata for a specific addressee by registration code or e-address.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, unit:array<string,mixed>|null}
+     */
+    public function getAddresseeUnit(string $query): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+        $query = trim($query);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'GetAddresseeUnitInput');
+        if (self::looksLikeEAddress($query)) {
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'EAddress', $query));
+        } else {
+            $ownerCode = self::normalizeOwnerCode($query);
+            $input->appendChild(
+                $doc->createElementNS(self::NS_UUI, 'AddresseeOwnerCode', $ownerCode !== '' ? $ownerCode : $query)
+            );
+        }
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_ADDRESSEE_UNIT);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+                'unit' => null,
+            ];
+        }
+
+        $parsed = self::tryParseGetAddresseeUnitResponse($raw);
+        $unit = is_array($parsed['AddresseeUnit'] ?? null) ? $parsed['AddresseeUnit'] : null;
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
+            'unit' => $unit,
+        ];
+    }
+
+    /**
+     * Direct SOAP GetMessageServerConfirmation (mTLS + WSSE).
+     *
+     * Gets the server-side confirmation status for a previously sent message.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getMessageServerConfirmation(string $messageId): array
+    {
+        $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
+        $messageId = trim($messageId);
+
+        $doc = new \DOMDocument('1.0', 'utf-8');
+        $doc->formatOutput = false;
+        $doc->preserveWhiteSpace = false;
+
+        $env = $doc->createElementNS(self::NS_SOAP, 'Envelope');
+        $doc->appendChild($env);
+        $header = $doc->createElementNS(self::NS_SOAP, 'Header');
+        $body = $doc->createElementNS(self::NS_SOAP, 'Body');
+        $env->appendChild($header);
+        $env->appendChild($body);
+
+        $input = $doc->createElementNS(self::NS_UUI, 'GetMessageServerConfirmationInput');
+        $input->appendChild($doc->createElementNS(self::NS_UUI, 'MessageId', $messageId));
+        $body->appendChild($input);
+
+        WsseSigner::apply($doc, $header, $this->cfg, $endpoint, self::ACTION_GET_MESSAGE_SERVER_CONFIRMATION);
+
+        $requestXml = $doc->saveXML();
+        if ($requestXml === false) {
+            throw new \RuntimeException('Failed to serialize SOAP XML');
+        }
+
+        [$status, $raw] = $this->postSoap($endpoint, $requestXml);
+        $faultOrNull = self::tryParseSoapResponse($raw);
+        if (is_array($faultOrNull) && array_key_exists('Fault', $faultOrNull)) {
+            return [
+                'status' => $status,
+                'body' => $faultOrNull,
+                'raw' => $raw,
+                'request_xml' => $requestXml,
+            ];
+        }
+
+        $parsed = self::tryParseGetMessageServerConfirmationResponse($raw);
+        return [
+            'status' => $status,
+            'body' => $parsed,
+            'raw' => $raw,
+            'request_xml' => $requestXml,
         ];
     }
 
@@ -1791,6 +2144,192 @@ final class DirectSoapClient
             'Notifications' => ['Notification' => $notifications],
             'HasMoreData' => $hasMore,
         ];
+    }
+
+    /**
+     * Parse GetInitialAddresseeRecordListOutput or GetChangedAddresseeRecordListOutput.
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function tryParseAddresseeRecordListResponse(string $raw, string $outputElementName): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $recordNodes = $xpath->query(
+            '//*[local-name()="' . $outputElementName . '"]//*[local-name()="AddresseeRecord"]'
+        );
+        if (!$recordNodes || $recordNodes->length === 0) {
+            $recordNodes = $xpath->query('//*[local-name()="AddresseeRecord"]');
+        }
+
+        $records = [];
+        if ($recordNodes) {
+            foreach ($recordNodes as $node) {
+                if (!$node instanceof \DOMElement) {
+                    continue;
+                }
+                $records[] = self::directChildrenMap($node);
+            }
+        }
+
+        // ContinuationToken (GetInitialAddresseeRecordList)
+        $tokenNode = $xpath->query('//*[local-name()="ContinuationToken"][1]');
+        $token = ($tokenNode && $tokenNode->length > 0) ? trim((string)$tokenNode->item(0)->textContent) : null;
+        if ($token === '') {
+            $token = null;
+        }
+
+        // HasMoreData (GetChangedAddresseeRecordList)
+        $hasMore = self::xmlBoolOrNull(
+            trim((string)$xpath->evaluate('string(//*[local-name()="HasMoreData"][1])'))
+        );
+
+        $result = ['AddresseeRecords' => $records];
+        if ($token !== null) {
+            $result['ContinuationToken'] = $token;
+        }
+        if ($hasMore !== null) {
+            $result['HasMoreData'] = $hasMore;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Parse ValidateEAddressOutput.
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function tryParseValidateEAddressResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $resultNodes = $xpath->query(
+            '//*[local-name()="ValidateEAddressOutput"]//*[local-name()="EAddressValidationResult"]'
+        );
+        if (!$resultNodes || $resultNodes->length === 0) {
+            $resultNodes = $xpath->query('//*[local-name()="EAddressValidationResult"]');
+        }
+
+        $results = [];
+        if ($resultNodes) {
+            foreach ($resultNodes as $node) {
+                if (!$node instanceof \DOMElement) {
+                    continue;
+                }
+                $item = self::directChildrenMap($node);
+                // Flatten Owner sub-element into the result
+                $ownerNode = $xpath->query('./*[local-name()="Owner"][1]', $node)?->item(0);
+                if ($ownerNode instanceof \DOMElement) {
+                    $item['Owner'] = self::directChildrenMap($ownerNode);
+                }
+                $results[] = $item;
+            }
+        }
+
+        return ['Results' => $results];
+    }
+
+    /**
+     * Parse GetAddresseeUnitOutput.
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function tryParseGetAddresseeUnitResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $unitNode = $xpath->query(
+            '//*[local-name()="GetAddresseeUnitOutput"]//*[local-name()="AddresseeUnit"][1]'
+        )?->item(0);
+        if (!$unitNode instanceof \DOMElement) {
+            $unitNode = $xpath->query('//*[local-name()="AddresseeUnit"][1]')?->item(0);
+        }
+
+        if (!$unitNode instanceof \DOMElement) {
+            return ['AddresseeUnit' => null];
+        }
+
+        $unit = self::directChildrenMap($unitNode);
+        // Flatten Owner sub-element
+        $ownerNode = $xpath->query('./*[local-name()="Owner"][1]', $unitNode)?->item(0);
+        if ($ownerNode instanceof \DOMElement) {
+            $unit['Owner'] = self::directChildrenMap($ownerNode);
+        }
+
+        return ['AddresseeUnit' => $unit];
+    }
+
+    /**
+     * Parse GetMessageServerConfirmationOutput (ServerConfirmationPart).
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function tryParseGetMessageServerConfirmationResponse(string $raw): ?array
+    {
+        $doc = self::loadSoapDom($raw);
+        if (!$doc instanceof \DOMDocument) {
+            return null;
+        }
+        $xpath = new \DOMXPath($doc);
+
+        $outputNode = $xpath->query('//*[local-name()="GetMessageServerConfirmationOutput"][1]')?->item(0);
+        if ($outputNode instanceof \DOMElement) {
+            return self::nodeToArray($outputNode, $xpath);
+        }
+
+        // Fallback: return all body children
+        $bodyNode = $xpath->query('//*[local-name()="Body"][1]')?->item(0);
+        if ($bodyNode instanceof \DOMElement) {
+            return self::nodeToArray($bodyNode, $xpath);
+        }
+
+        return null;
+    }
+
+    /**
+     * Recursively convert a DOMElement to a nested array (used for complex/unfamiliar response shapes).
+     *
+     * @return array<string,mixed>
+     */
+    private static function nodeToArray(\DOMElement $node, \DOMXPath $xpath): array
+    {
+        $result = [];
+        foreach ($node->childNodes as $child) {
+            if (!$child instanceof \DOMElement) {
+                continue;
+            }
+            $name = $child->localName ?? $child->nodeName;
+            $childHasElements = false;
+            foreach ($child->childNodes as $grandChild) {
+                if ($grandChild instanceof \DOMElement) {
+                    $childHasElements = true;
+                    break;
+                }
+            }
+            $value = $childHasElements ? self::nodeToArray($child, $xpath) : trim((string)$child->textContent);
+            if (array_key_exists($name, $result)) {
+                if (!is_array($result[$name]) || !isset($result[$name][0])) {
+                    $result[$name] = [$result[$name]];
+                }
+                $result[$name][] = $value;
+            } else {
+                $result[$name] = $value;
+            }
+        }
+        return $result;
     }
 
     private static function tryParseGetAttachmentSectionResponse(string $raw): ?array

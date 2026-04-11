@@ -89,10 +89,14 @@ run_example() {
         poll_notifications) script="examples/soap_poll_notifications.php" ;;
         get_public_key_list) script="examples/soap_get_public_key_list.php" ;;
         confirm_notifications) script="examples/soap_confirm_notification_list.php" ;;
+        get_addressee_list)   script="examples/soap_get_addressee_list.php" ;;
+        validate_eaddress)    script="examples/soap_validate_eaddress.php" ;;
+        get_server_confirm)   script="examples/soap_get_message_server_confirmation.php" ;;
         *)
             echo "Nezināms piemērs: $example" >&2
             echo "Pieejamie: cert_validate send get_message_list get_message receive_and_confirm" >&2
             echo "           search_addressee poll_notifications get_public_key_list confirm_notifications" >&2
+            echo "           get_addressee_list validate_eaddress get_server_confirm" >&2
             exit 1
             ;;
     esac
@@ -116,6 +120,11 @@ run_example() {
         -e DIV_DEBUG_DIR="${DIV_DEBUG_DIR:-}" \
         -e DIV_MSG_SUBJECT="${DIV_MSG_SUBJECT:-}" \
         -e DIV_MSG_BODY="${DIV_MSG_BODY:-}" \
+        -e DIV_CONTINUATION_TOKEN="${DIV_CONTINUATION_TOKEN:-}" \
+        -e DIV_ALL_PAGES="${DIV_ALL_PAGES:-1}" \
+        -e DIV_PRINT_MAX="${DIV_PRINT_MAX:-5}" \
+        -e DIV_EADDRESSES="${DIV_EADDRESSES:-}" \
+        -e DIV_EADDRESS_TYPE="${DIV_EADDRESS_TYPE:-}" \
         "$IMAGE" php "/app/$script" "$@"
 }
 
@@ -149,6 +158,9 @@ case "$CMD" in
         echo "  receive_and_confirm  Saņem nākamo ziņu (+ DIV_CONFIRM=1)"
         echo "  search_addressee     Meklē saņēmēju (DIV_LOOKUP_VALUES=...)"
         echo "  poll_notifications   Iegūst notifikācijas"
+        echo "  get_addressee_list   Iegūst pilnu VRAA adresātu sarakstu (DIV_ALL_PAGES=1)"
+        echo "  validate_eaddress    Validē e-adreses (DIV_EADDRESSES=...)"
+        echo "  get_server_confirm   Iegūst servera apstiprinājumu ziņai (DIV_MSG_ID=...)"
         ;;
     *)
         run_example "$@"

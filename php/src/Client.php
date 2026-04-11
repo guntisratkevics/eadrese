@@ -663,6 +663,69 @@ final class Client
         return $map;
     }
 
+    /**
+     * Direct SOAP GetInitialAddresseeRecordList — full initial sync of VRAA addressee directory.
+     *
+     * Automatically paginates using ContinuationToken and returns all records in one call.
+     * Pass $allPages = false with an explicit $continuationToken to fetch a single page.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, records:list<array<string,mixed>>, continuation_token:string|null}
+     */
+    public function getInitialAddresseeRecordListSoap(?string $continuationToken = null, bool $allPages = true): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getInitialAddresseeRecordList($continuationToken, $allPages);
+    }
+
+    /**
+     * Direct SOAP GetChangedAddresseeRecordList — incremental sync of VRAA addressee directory.
+     *
+     * Returns all records changed since the given version number.
+     * Use the highest Version value from a previous sync as $lastVersion.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, records:list<array<string,mixed>>, has_more_data:bool}
+     */
+    public function getChangedAddresseeRecordListSoap(int $lastVersion = 0): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getChangedAddresseeRecordList($lastVersion);
+    }
+
+    /**
+     * Direct SOAP ValidateEAddress — validate e-addresses in the VRAA directory.
+     *
+     * @param string[] $eAddresses
+     * @param string|null $type 'NaturalPerson', 'RegisteredEntity', or null (no filter)
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, results:list<array<string,mixed>>}
+     */
+    public function validateEAddressSoap(array $eAddresses, ?string $type = null): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->validateEAddress($eAddresses, $type);
+    }
+
+    /**
+     * Direct SOAP GetAddresseeUnit — fetch full unit metadata for an addressee.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string, unit:array<string,mixed>|null}
+     */
+    public function getAddresseeUnitSoap(string $query): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getAddresseeUnit($query);
+    }
+
+    /**
+     * Direct SOAP GetMessageServerConfirmation — get server confirmation for a sent message.
+     *
+     * @return array{status:int, body:array|null, raw:string, request_xml:string}
+     */
+    public function getMessageServerConfirmationSoap(string $messageId): array
+    {
+        $soap = new DirectSoapClient($this->config);
+        return $soap->getMessageServerConfirmation($messageId);
+    }
+
     private static function resolveRecipientCertPem(?string $recipientCertPath, ?string $recipientCertPem): ?string
     {
         $inlinePem = trim((string)($recipientCertPem ?? ''));
