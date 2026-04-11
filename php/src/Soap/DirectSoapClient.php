@@ -709,6 +709,12 @@ final class DirectSoapClient
      *
      * Fetches full unit metadata for a specific addressee by registration code or e-address.
      *
+     * ⚠️  PERMISSION RESTRICTED: This operation is only available to government institutions
+     * that own and manage their own DIV addressee units. Commercial clients (e.g. private
+     * companies) will receive "Nav atļauts pārvaldīt norādīto adresātu" (not authorised to
+     * manage the specified addressee) or an EAddress format error.
+     * For general addressee lookups use SearchAddresseeUnit instead.
+     *
      * @return array{status:int, body:array|null, raw:string, request_xml:string, unit:array<string,mixed>|null}
      */
     public function getAddresseeUnit(string $query): array
@@ -727,8 +733,16 @@ final class DirectSoapClient
         $env->appendChild($header);
         $env->appendChild($body);
 
+        // GetAddresseeUnitInput schema (xsd12): flat — AddresseeOwnerCode first, EAddress second.
+        // Both minOccurs="0" in XSD but VRAA business logic requires at least AddresseeOwnerCode.
+        // Note: this operation is restricted to the owner of the unit (government accounts).
+        // Commercial clients should use SearchAddresseeUnit for general lookups.
         $input = $doc->createElementNS(self::NS_UUI, 'GetAddresseeUnitInput');
         if (self::looksLikeEAddress($query)) {
+            // Extract the registration number from the e-address (e.g. _DEFAULT@90000069281 → 90000069281)
+            $ownerCode = (string)preg_replace('/^[^@]+@/', '', $query);
+            // Schema sequence order: AddresseeOwnerCode first, EAddress second
+            $input->appendChild($doc->createElementNS(self::NS_UUI, 'AddresseeOwnerCode', $ownerCode));
             $input->appendChild($doc->createElementNS(self::NS_UUI, 'EAddress', $query));
         } else {
             $ownerCode = self::normalizeOwnerCode($query);

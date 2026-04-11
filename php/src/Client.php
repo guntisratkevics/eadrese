@@ -707,6 +707,9 @@ final class Client
     /**
      * Direct SOAP GetAddresseeUnit — fetch full unit metadata for an addressee.
      *
+     * ⚠️  Restricted to government institutions managing their own DIV units.
+     * Commercial clients will receive a permission error. Use searchAddresseeSoap() instead.
+     *
      * @return array{status:int, body:array|null, raw:string, request_xml:string, unit:array<string,mixed>|null}
      */
     public function getAddresseeUnitSoap(string $query): array

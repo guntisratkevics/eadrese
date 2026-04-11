@@ -28,12 +28,17 @@ $signKey      = getenv('DIV_SIGN_KEY')    ?: $clientKey;
 $sender       = getenv('DIV_SENDER')      ?: '_PRIVATE@<REG_NO>';
 $verifySsl    = (getenv('DIV_VERIFY_SSL') ?: '0') !== '0';
 
-// Optional: pass a ContinuationToken to fetch a single page.
-// Leave empty to auto-paginate through ALL records (may take a while for large directories).
-$token        = trim((string)getenv('DIV_CONTINUATION_TOKEN'));
-$allPages     = (getenv('DIV_ALL_PAGES') ?: '1') !== '0';
+// DIV_LAST_VERSION=<int>  → GetChangedAddresseeRecordList (delta sync from that version)
+// DIV_LAST_VERSION unset   → GetInitialAddresseeRecordList (full initial sync)
+$lastVersionEnv = getenv('DIV_LAST_VERSION');
+$isChanged      = $lastVersionEnv !== false && $lastVersionEnv !== '';
+$lastVersion    = $isChanged ? (int)$lastVersionEnv : 0;
+
+// Optional: pass a ContinuationToken to resume a previous GetInitialAddresseeRecordList page.
+$token    = trim((string)getenv('DIV_CONTINUATION_TOKEN'));
+$allPages = (getenv('DIV_ALL_PAGES') ?: '1') !== '0';
 // Limit printed records to avoid flooding the terminal.
-$printMax     = (int)(getenv('DIV_PRINT_MAX') ?: '5');
+$printMax = (int)(getenv('DIV_PRINT_MAX') ?: '5');
 
 $cfg = new Config(
     $wsdlUrl,
@@ -46,10 +51,16 @@ $cfg = new Config(
 );
 
 $client = new Client($cfg);
-$result = $client->getInitialAddresseeRecordListSoap(
-    $token !== '' ? $token : null,
-    $allPages
-);
+if ($isChanged) {
+    // Incremental sync: only records changed since $lastVersion
+    $result = $client->getChangedAddresseeRecordListSoap($lastVersion);
+} else {
+    // Full initial sync (paginated)
+    $result = $client->getInitialAddresseeRecordListSoap(
+        $token !== '' ? $token : null,
+        $allPages
+    );
+}
 
 $debugDir = getenv('DIV_DEBUG_DIR') ?: '';
 if ($debugDir !== '') {
