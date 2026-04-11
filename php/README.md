@@ -48,7 +48,7 @@ All core operations tested against the VRAA TEST endpoint with a real VISS Root 
 | Error | Cause | Fix |
 |-------|-------|-----|
 | PSS.024 | `_PRIVATE@` → `_PRIVATE@` routing not supported in PROD; private-to-private delivery is disabled by design | VRAA must activate `_DEFAULT@` sender address; can then send only to state-type addressees (`_DEFAULT@`, `IEN@`) |
-| PSS.045 | Envelope naming guidelines violation — `EINVOICE` document kind is only permitted from state-type senders (`_DEFAULT@`, `IEN@`); `_PRIVATE@` accounts cannot send invoices | Requires `_DEFAULT@` sender activation; unrelated to routing |
+| PSS.045 | Envelope naming guidelines violation — in older versions of this library caused by an invalid XAdES element name (`<SignedProperties-76338609>` instead of `<SignedProperties>`). **Fixed in this library.** EINVOICE can be sent from `_PRIVATE@` accounts; PSS.045 indicates a malformed envelope, not a sender-type restriction | Upgrade to current version; ensure `SignedProperties` element has no random suffix in the tag name |
 | Rate limit on `GetInitialAddresseeRecordList` | VRAA enforces minimum wait between full syncs | Implement cooldown in calling code |
 | Rate limit on `GetChangedAddresseeRecordList` | Same minimum-wait rule | Use reasonable polling intervals |
 | `ValidateEAddress` / `GetAddresseeUnit` | Government-account permission required | Use `SearchAddresseeUnit` for lookups |
