@@ -47,8 +47,8 @@ All core operations tested against the VRAA TEST endpoint with a real VISS Root 
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| PSS.024 | `_PRIVATE@` sender cannot route to `_PRIVATE@` recipient in PROD | VRAA must activate `_DEFAULT@` sender address |
-| PSS.045 | EINVOICE from `_PRIVATE@` sender not authorised | Same — requires `_DEFAULT@` activation |
+| PSS.024 | `_PRIVATE@` → `_PRIVATE@` routing not supported in PROD; private-to-private delivery is disabled by design | VRAA must activate `_DEFAULT@` sender address; can then send only to state-type addressees (`_DEFAULT@`, `IEN@`) |
+| PSS.045 | Envelope naming guidelines violation — `EINVOICE` document kind is only permitted from state-type senders (`_DEFAULT@`, `IEN@`); `_PRIVATE@` accounts cannot send invoices | Requires `_DEFAULT@` sender activation; unrelated to routing |
 | Rate limit on `GetInitialAddresseeRecordList` | VRAA enforces minimum wait between full syncs | Implement cooldown in calling code |
 | Rate limit on `GetChangedAddresseeRecordList` | Same minimum-wait rule | Use reasonable polling intervals |
 | `ValidateEAddress` / `GetAddresseeUnit` | Government-account permission required | Use `SearchAddresseeUnit` for lookups |
