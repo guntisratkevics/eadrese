@@ -35,7 +35,7 @@ All core operations tested against the VRAA TEST endpoint with a real VISS Root 
 - `GetMessageList` → HTTP 200, 10 headers
 - `GetMessage` → HTTP 200, `envelope_xml_len: 21241`
 - `receive_and_confirm` → HTTP 200, `attachments_count: 1`
-- `SearchAddresseeUnit(40103166694)` → `result_count: 1`
+- `SearchAddresseeUnit` → addressee found in directory
 - `GetPublicKeyList` → `key_count: 1`, RSA key returned
 - `GetNotificationList` → 25 notifications returned and confirmed
 - `GetInitialAddresseeRecordList` → full state addressee directory returned (auto-paginated)
