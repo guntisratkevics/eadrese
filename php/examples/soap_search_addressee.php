@@ -27,7 +27,15 @@ $signCertPath = getenv('DIV_SIGN_CERT') ?: $clientCertPath;
 $signKeyPath = getenv('DIV_SIGN_KEY') ?: $clientKeyPath;
 $sender = getenv('DIV_SENDER') ?: '_PRIVATE@<REG_NO>';
 $verifySsl = (getenv('DIV_VERIFY_SSL') ?: '0') !== '0';
-$lookup = trim((string)(getenv('DIV_LOOKUP_VALUE') ?: '40103166694'));
+$lookup = trim((string)getenv('DIV_LOOKUP_VALUE'));
+if ($lookup === '') {
+    // Fallback: derive from DIV_SENDER (e.g. _PRIVATE@40001234567 -> 40001234567)
+    $lookup = preg_replace('/^[^@]+@/', '', trim((string)getenv('DIV_SENDER')));
+}
+if ($lookup === '') {
+    fwrite(STDERR, "Error: set DIV_LOOKUP_VALUE (registration number) or DIV_SENDER env var.\n");
+    exit(1);
+}
 
 $cfg = new Config(
     $wsdlUrl,

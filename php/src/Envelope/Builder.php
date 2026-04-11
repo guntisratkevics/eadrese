@@ -24,6 +24,9 @@ final class Builder
     /**
      * @param string[] $recipients
      * @param Attachment[] $attachments
+     * @param array<int,array{RecipientE-Address:string,EncryptionInfo?:array{Key:string,CertificateThumbprint:string}}>|null $recipientEntries
+     *   Per-recipient transport entries with individual EncryptionInfo. When provided, overrides the
+     *   single-key encryptionKeyB64/recipientThumbprintB64 path (mirrors Python's per-recipient flow).
      * @return array{0: array, 1: array|null, 2: string}
      */
     public static function buildEnvelope(
@@ -39,7 +42,8 @@ final class Builder
         ?string $symmetricIvBytes = null,
         string $encryptionMode = 'gcm',
         ?string $traceText = 'Created',
-        bool $notifySenderOnDelivery = false
+        bool $notifySenderOnDelivery = false,
+        ?array $recipientEntries = null
     ): array {
         $now = new \DateTimeImmutable('now', new \DateTimeZone('Europe/Riga'));
         $messageId = bin2hex(random_bytes(16));
@@ -51,6 +55,7 @@ final class Builder
         $cbcIv = $useCbc ? ($symmetricIvBytes ?? random_bytes(16)) : null;
 
         foreach ($attachments as $idx => $att) {
+            // 0-based ContentId/ContentReference — matches Python client and official Java client.
             $contentId = (string)$idx;
             $payloadBytes = $att->content;
 
@@ -88,7 +93,7 @@ final class Builder
                     'DigestValue' => $digestB64,
                 ],
                 'Compressed' => false,
-                'AppendixNumber' => '1',
+                'AppendixNumber' => (string)($idx + 1),
             ];
         }
 
@@ -113,16 +118,20 @@ final class Builder
             $documentMetadata['PayloadReference'] = ['File' => $files];
         }
 
-        $recipientEntries = [];
-        foreach ($recipients as $recipient) {
-            $entry = ['RecipientE-Address' => $recipient];
-            if ($encryptionKeyB64 && $recipientThumbprintB64) {
-                $entry['EncryptionInfo'] = [
-                    'Key' => $encryptionKeyB64,
-                    'CertificateThumbprint' => $recipientThumbprintB64,
-                ];
+        // Use per-recipient entries when provided (EINVOICE auto-fetch flow); fall back to
+        // the legacy single-key path for backwards compatibility.
+        if ($recipientEntries === null) {
+            $recipientEntries = [];
+            foreach ($recipients as $recipient) {
+                $entry = ['RecipientE-Address' => $recipient];
+                if ($encryptionKeyB64 && $recipientThumbprintB64) {
+                    $entry['EncryptionInfo'] = [
+                        'Key' => $encryptionKeyB64,
+                        'CertificateThumbprint' => $recipientThumbprintB64,
+                    ];
+                }
+                $recipientEntries[] = $entry;
             }
-            $recipientEntries[] = $entry;
         }
 
         $senderTransport = [

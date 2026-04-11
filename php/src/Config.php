@@ -36,7 +36,7 @@ final class Config
         bool $verifySsl = true,
         string $defaultFrom = '_DEFAULT@90000000000',
         string $defaultTo = '_PRIVATE@10000000000',
-        bool $vidSubaddressAuto = false,
+        bool $vidSubaddressAuto = true,
         ?string $vidSubaddress = null,
         string $encryptionMode = 'gcm'
     ) {

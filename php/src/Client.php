@@ -35,7 +35,8 @@ final class Client
         ?string $symmetricIvBytes = null,
         ?string $traceText = 'Created',
         bool $notifySenderOnDelivery = false,
-        ?string $encryptionMode = null
+        ?string $encryptionMode = null,
+        ?array $recipientEntries = null
     ): array {
         $normalizedRecipients = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
 
@@ -52,7 +53,8 @@ final class Client
             $symmetricIvBytes,
             $encryptionMode ?? $this->config->encryptionMode,
             $traceText,
-            $notifySenderOnDelivery
+            $notifySenderOnDelivery,
+            $recipientEntries
         );
     }
 
@@ -92,9 +94,10 @@ final class Client
         string $bodyText = '',
         string $documentKindCode = 'DOC_EMPTY'
     ): array {
+        $normalizedRecipients = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
         $soap = new DirectSoapClient($this->config);
         return $soap->sendTextMessage(
-            $recipients,
+            $normalizedRecipients,
             $subject,
             $bodyText,
             $documentKindCode
@@ -405,7 +408,10 @@ final class Client
 
         $modulusB64 = trim((string)($recipientPublicKeyModulusB64 ?? ''));
         $exponentB64 = trim((string)($recipientPublicKeyExponentB64 ?? ''));
+        $perRecipientEntries = null;
+
         if ($modulusB64 !== '' && $exponentB64 !== '') {
+            // Single-recipient public key provided manually — use legacy single-key path.
             if (trim((string)$thumbprint) === '') {
                 throw new \RuntimeException(
                     'recipientThumbprintB64 is required when recipientPublicKeyModulusB64/ExponentB64 are provided'
@@ -418,7 +424,7 @@ final class Client
             $symmetricIv = $symmetricIv ?? random_bytes(16);
             $keyBlob = Crypto::buildDivKeyBlob($symmetricKey, $symmetricIv);
             $encryptionKey = Crypto::encryptKeyOaepSha1FromModExp($modulusB64, $exponentB64, $keyBlob);
-        } else {
+        } elseif ($recipientCertPath !== null || $recipientCertPem !== null) {
             $certPem = self::resolveRecipientCertPem($recipientCertPath, $recipientCertPem);
             if ($certPem !== null) {
                 if (in_array($mode, ['oaep_cbc', 'cbc'], true)) {
@@ -427,6 +433,38 @@ final class Client
                 } else {
                     [$encryptionKey, $thumbprint, $symmetricKey] =
                         Crypto::deriveEncryptionFields($certPem, $symmetricKey);
+                }
+            }
+        } elseif ($documentKindCode === 'EINVOICE' && $encryptionKey === null) {
+            // EINVOICE without explicit encryption params: auto-fetch public keys for all recipients
+            // and build per-recipient EncryptionInfo (mirrors Python's _resolve_public_key_map flow).
+            $normalizedForFetch = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
+            $soap = new DirectSoapClient($this->config);
+            $pkResult = $soap->getPublicKeyList($normalizedForFetch);
+            $publicKeyMap = self::buildPublicKeyMap($pkResult['keys'] ?? []);
+            if (!empty($publicKeyMap)) {
+                if (!in_array($mode, ['oaep_cbc', 'cbc'], true)) {
+                    $mode = 'oaep_cbc';
+                }
+                $symmetricKey = $symmetricKey ?? random_bytes(32);
+                $symmetricIv = $symmetricIv ?? random_bytes(16);
+                $keyBlob = Crypto::buildDivKeyBlob($symmetricKey, $symmetricIv);
+                $perRecipientEntries = [];
+                foreach ($normalizedForFetch as $addr) {
+                    $entry = ['RecipientE-Address' => $addr];
+                    $pkInfo = $publicKeyMap[strtolower($addr)] ?? null;
+                    if ($pkInfo !== null) {
+                        $encKeyForRecipient = Crypto::encryptKeyOaepSha1FromModExp(
+                            $pkInfo['modulus'],
+                            $pkInfo['exponent'],
+                            $keyBlob
+                        );
+                        $entry['EncryptionInfo'] = [
+                            'Key' => $encKeyForRecipient,
+                            'CertificateThumbprint' => $pkInfo['thumbprint'],
+                        ];
+                    }
+                    $perRecipientEntries[] = $entry;
                 }
             }
         }
@@ -443,7 +481,8 @@ final class Client
             $symmetricIv,
             $traceText,
             $notifySenderOnDelivery,
-            $mode
+            $mode,
+            $perRecipientEntries
         );
 
         $soap = new DirectSoapClient($this->config);
@@ -596,6 +635,32 @@ final class Client
         $token = strtolower(trim((string)$this->config->tokenUrl));
         $isTest = str_contains($wsdl, 'divtest') || str_contains($token, 'divtest');
         return $isTest ? 'VID_EREKINI_TEST@90000069281' : 'VID_EREKINI_PROD@90000069281';
+    }
+
+    /**
+     * Build a lowercase-keyed map of public key info from getPublicKeyList() result.
+     *
+     * @param array<int,array<string,mixed>> $keys  Raw key entries from DirectSoapClient::getPublicKeyList()
+     * @return array<string,array{modulus:string,exponent:string,thumbprint:string}>
+     */
+    private static function buildPublicKeyMap(array $keys): array
+    {
+        $map = [];
+        foreach ($keys as $key) {
+            $addr      = trim((string)($key['EAddress']               ?? $key['eaddress']               ?? ''));
+            $modulus   = trim((string)($key['Modulus']                ?? $key['modulus']                ?? ''));
+            $exponent  = trim((string)($key['Exponent']               ?? $key['exponent']               ?? ''));
+            $thumbprint = trim((string)($key['CertificateThumbprint'] ?? $key['certificateThumbprint']  ?? ''));
+            if ($addr === '' || $modulus === '' || $exponent === '' || $thumbprint === '') {
+                continue;
+            }
+            $map[strtolower($addr)] = [
+                'modulus'    => $modulus,
+                'exponent'   => $exponent,
+                'thumbprint' => $thumbprint,
+            ];
+        }
+        return $map;
     }
 
     private static function resolveRecipientCertPem(?string $recipientCertPath, ?string $recipientCertPem): ?string

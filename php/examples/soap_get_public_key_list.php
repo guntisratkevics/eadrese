@@ -44,7 +44,7 @@ $signKeyPath = getenv('DIV_SIGN_KEY') ?: $clientKeyPath;
 $sender = getenv('DIV_SENDER') ?: '_PRIVATE@<REG_NO>';
 $verifySsl = (getenv('DIV_VERIFY_SSL') ?: '0') !== '0';
 
-$rawRecipients = trim((string)(getenv('DIV_RECIPIENTS') ?: '_PRIVATE@40103166694'));
+$rawRecipients = trim((string)getenv('DIV_RECIPIENTS'));
 $recipients = parseRecipients($rawRecipients);
 if (empty($recipients)) {
     fwrite(STDERR, "Set DIV_RECIPIENTS with one or more e-addresses.\n");

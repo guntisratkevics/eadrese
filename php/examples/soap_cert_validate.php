@@ -47,7 +47,13 @@ $verifySsl = (getenv('DIV_VERIFY_SSL') ?: '0') !== '0';
 $lookupRaw = trim((string)(getenv('DIV_LOOKUP_VALUES') ?: ''));
 $lookupValues = parseLookupValues($lookupRaw);
 if (empty($lookupValues)) {
-    $lookupValues = ['40103166694', 'LV40103166694'];
+    // Derive from DIV_SENDER if available, e.g. _PRIVATE@40001234567 -> ['40001234567', 'LV40001234567']
+    $regNo = preg_replace('/^[^@]+@/', '', trim((string)getenv('DIV_SENDER')));
+    $lookupValues = $regNo !== '' ? [$regNo, 'LV' . $regNo] : [];
+}
+if (empty($lookupValues)) {
+    fwrite(STDERR, "Error: set DIV_LOOKUP_VALUES or DIV_SENDER env var.\n");
+    exit(1);
 }
 
 $cfg = new Config(

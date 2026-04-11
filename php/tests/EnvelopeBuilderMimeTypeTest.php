@@ -42,4 +42,5 @@ final class EnvelopeBuilderMimeTypeTest extends TestCase
         $file = $envelope['SenderDocument']['DocumentMetadata']['PayloadReference']['File'][0];
         $this->assertSame('text/plain', $file['MimeType']);
     }
+
 }

@@ -10,7 +10,9 @@ final class DirectSoapClient
 {
     private const NS_SOAP = 'http://www.w3.org/2003/05/soap-envelope';
     private const NS_UUI = 'http://vraa.gov.lv/xmlschemas/div/uui/2011/11';
+    private const NS_UUI_PREFIX = 'uui';
     private const NS_DIV = 'http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0';
+    private const NS_DIV_PREFIX = 'cm';
     private const NS_ADDR = 'http://ivis.eps.gov.lv/XMLSchemas/100001/Address/v1-1';
     private const NS_DS = 'http://www.w3.org/2000/09/xmldsig#';
     private const NS_ARRAYS = 'http://schemas.microsoft.com/2003/10/Serialization/Arrays';
@@ -838,10 +840,9 @@ final class DirectSoapClient
         $divDoc->formatOutput = false;
         $divDoc->preserveWhiteSpace = false;
 
+        // No prefix, no extra namespace declarations — match Python/Java output:
+        // <Envelope xmlns="http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0">
         $divEnv = $divDoc->createElementNS(self::NS_DIV, 'Envelope');
-        // Match the official clients: declare these namespaces on the DIV root.
-        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:addr', self::NS_ADDR);
-        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:ds', self::NS_DS);
         $divDoc->appendChild($divEnv);
 
         $senderDoc = $divDoc->createElementNS(self::NS_DIV, 'SenderDocument');
@@ -872,7 +873,6 @@ final class DirectSoapClient
             $docKind->appendChild($divDoc->createElementNS(self::NS_DIV, 'DocumentKindName', $documentKindCode));
         }
         $general->appendChild($docKind);
-
         $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Description', $bodyText));
         $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Title', $subject));
 
@@ -1118,9 +1118,11 @@ final class DirectSoapClient
         $divDoc->formatOutput = false;
         $divDoc->preserveWhiteSpace = false;
 
+        // Use the default namespace (no prefix) to match Python/Java output:
+        // <Envelope xmlns="http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0">
+        // Do NOT add xmlns:addr or xmlns:ds — they contaminate the SenderDocument C14N
+        // and cause VRAA to reject the envelope with PSS.045.
         $divEnv = $divDoc->createElementNS(self::NS_DIV, 'Envelope');
-        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:addr', self::NS_ADDR);
-        $divEnv->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:ds', self::NS_DS);
         $divDoc->appendChild($divEnv);
 
         self::appendDivValue($divDoc, $divEnv, 'SenderDocument', $senderDocument);
@@ -1140,6 +1142,7 @@ final class DirectSoapClient
             return;
         }
 
+        // No prefix — use default namespace to match Python/Java client output.
         $el = $doc->createElementNS(self::NS_DIV, $name);
         if (is_array($value)) {
             if (array_key_exists('Algorithm', $value) && $value['Algorithm'] !== null && !is_array($value['Algorithm'])) {
@@ -1382,7 +1385,7 @@ final class DirectSoapClient
         if (empty($attachmentItems)) {
             return;
         }
-        $attachmentsEl = $doc->createElementNS(self::NS_UUI, 'AttachmentsInput');
+        $attachmentsEl = $doc->createElementNS(self::NS_UUI, self::NS_UUI_PREFIX . ':AttachmentsInput');
         foreach ($attachmentItems as $item) {
             if (!is_array($item)) {
                 continue;
@@ -1391,12 +1394,12 @@ final class DirectSoapClient
             if ($contentId === '') {
                 continue;
             }
-            $attachmentEl = $doc->createElementNS(self::NS_UUI, 'AttachmentInput');
-            $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, 'ContentId', $contentId));
+            $attachmentEl = $doc->createElementNS(self::NS_UUI, self::NS_UUI_PREFIX . ':AttachmentInput');
+            $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, self::NS_UUI_PREFIX . ':ContentId', $contentId));
             $contents = $item['Contents'] ?? null;
             if (is_string($contents) && $contents !== '') {
                 $contents = preg_replace('/\s+/', '', $contents) ?? $contents;
-                $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, 'Contents', $contents));
+                $attachmentEl->appendChild($doc->createElementNS(self::NS_UUI, self::NS_UUI_PREFIX . ':Contents', $contents));
             }
             $attachmentsEl->appendChild($attachmentEl);
         }
@@ -1435,7 +1438,7 @@ final class DirectSoapClient
         $env->appendChild($header);
         $env->appendChild($body);
 
-        $sendInput = $doc->createElementNS(self::NS_UUI, 'SendMessageInput');
+        $sendInput = $doc->createElementNS(self::NS_UUI, self::NS_UUI_PREFIX . ':SendMessageInput');
         $body->appendChild($sendInput);
         // Insert the DIV XML via string replacement after WSSE is applied, so the SOAP serializer cannot
         // rewrite namespace declarations inside the DIV envelope.

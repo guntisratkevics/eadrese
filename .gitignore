@@ -6,4 +6,17 @@ __pycache__/
 .env
 .venv
 .DS_Store
+
+# PHP SDK
 php/vendor/
+php/.env.test
+php/.test-certs/
+php/.tmp_*
+php/test_einvoice.php
+php/tests/manual_pss045_*.php
+
+# Cert artifacts (never commit real certificates)
+prod-certs/
+*.p12
+*.key
+*.pem
