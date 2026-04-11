@@ -17,7 +17,7 @@ No Composer dependencies required for production use; a PSR-4 autoloader is bund
 | `GetPublicKeyList` | `getPublicKeyListSoap()` | ✅ Validated |
 | `GetNotificationList` | `pollNotificationsSoap()` | ✅ Validated |
 | `ConfirmNotificationList` | `confirmNotificationListSoap()` | ✅ Validated |
-| `GetInitialAddresseeRecordList` | `getInitialAddresseeRecordListSoap()` | ✅ Validated (4606 records) |
+| `GetInitialAddresseeRecordList` | `getInitialAddresseeRecordListSoap()` | ✅ Validated |
 | `GetChangedAddresseeRecordList` | `getChangedAddresseeRecordListSoap()` | ✅ Validated (rate-limited by VRAA) |
 | `GetMessageServerConfirmation` | `getMessageServerConfirmationSoap()` | ✅ Validated |
 | `ValidateEAddress` | `validateEAddressSoap()` | ⚠️ Government accounts only |
@@ -38,7 +38,7 @@ All core operations tested against the VRAA TEST endpoint with a real VISS Root 
 - `SearchAddresseeUnit(40103166694)` → `result_count: 1`
 - `GetPublicKeyList` → `key_count: 1`, RSA key returned
 - `GetNotificationList` → 25 notifications returned and confirmed
-- `GetInitialAddresseeRecordList` → 4606 state addressee records (auto-paginated)
+- `GetInitialAddresseeRecordList` → full state addressee directory returned (auto-paginated)
 - `GetChangedAddresseeRecordList` → correct SOAP call; VRAA rate-limits rapid calls
 - `GetMessageServerConfirmation` → full `ServerConfirmationPart` with timestamps and VRAA signature
 - `ConfirmNotificationList` → `confirmed_ids` match requested IDs
