@@ -1,123 +1,209 @@
-# PHP client (experimental)
+# PHP client for Latvia's e-Address (DIV / VUS)
 
-This directory contains an experimental PHP client for Latvia's e-Address (DIV / VUS).
-It focuses on direct SOAP (mTLS + WSSE + DIV signing), message retrieval, attachment decode/decrypt, and confirmation flows.
+Direct SOAP client for the VRAA DIV unified interface — mTLS, WSSE, XAdES envelope signing, message send/receive, attachment encryption, and addressee directory sync.
+No Composer dependencies required for production use; a PSR-4 autoloader is bundled.
 
-## Status
-- Envelope builder (SenderDocument + attachments metadata).
-- AES-GCM payload encryption helper.
-- OAEP+AES-CBC outbound helper (DIV-aligned mode).
-- DIV inbound decryption helper (RSA-OAEP SHA1 -> AES-CBC key + IV).
-- Direct SOAP `SendMessage` (mTLS + WSSE + SenderDocument signature) is implemented and validated from STAGE.
-- Direct SOAP `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage` are implemented.
-- Decoder helpers for attachment section stitching + decrypt/decompress are implemented.
-- Combined-envelope confirm signing + netify normalization is implemented to match Java/.NET profile behavior.
+## Implemented operations
 
-## Validation Status (as of 2026-02-20)
-Tested and working
-- Direct SOAP `SendMessage` from STAGE (`php examples/soap_send.php`) returns HTTP 200 and MessageId.
-- Direct SOAP `GetMessageList` from STAGE (`php examples/soap_get_message_list.php`) returns HTTP 200.
-- MIME normalization for encrypted `text/*` attachments is applied in envelope builder.
-- `ConfirmMessage` on STAGE (manual and scripted runs) returns success and consumes inbox messages.
-- `GetMessage` + attachment decode/decrypt + confirm smoke path is validated via `examples/soap_receive_and_confirm.php`.
+| Operation | Method | Status |
+|-----------|--------|--------|
+| `CertValidate` | `certValidateSoap()` | ✅ Validated |
+| `SendMessage` | `sendMessageSoap()` | ✅ Validated |
+| `GetMessageList` | `getMessageListSoap()` | ✅ Validated |
+| `GetMessage` | `getMessageSoap()` | ✅ Validated |
+| `GetAttachmentSection` | `getAttachmentSectionSoap()` | ✅ Validated |
+| `ConfirmMessage` | `confirmMessageSoap()` | ✅ Validated |
+| `SearchAddresseeUnit` | `searchAddresseeSoap()` | ✅ Validated |
+| `GetPublicKeyList` | `getPublicKeyListSoap()` | ✅ Validated |
+| `GetNotificationList` | `pollNotificationsSoap()` | ✅ Validated |
+| `ConfirmNotificationList` | `confirmNotificationListSoap()` | ✅ Validated |
+| `GetInitialAddresseeRecordList` | `getInitialAddresseeRecordListSoap()` | ✅ Validated (4606 records) |
+| `GetChangedAddresseeRecordList` | `getChangedAddresseeRecordListSoap()` | ✅ Validated (rate-limited by VRAA) |
+| `GetMessageServerConfirmation` | `getMessageServerConfirmationSoap()` | ✅ Validated |
+| `ValidateEAddress` | `validateEAddressSoap()` | ⚠️ Government accounts only |
+| `GetAddresseeUnit` | `getAddresseeUnitSoap()` | ⚠️ Government accounts only |
 
-Implemented but not yet validated end-to-end
-- Broad stress matrix across all MTOM/sectioned attachment variants under sustained load.
-- Long-run operational hardening (retry/backoff/timeout strategies in production-like workloads).
+> **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
+> Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `SearchAddresseeUnit` instead.
 
-Release gate (STAGE-only)
-- Local `composer test` is optional and not a release gate.
-- Functional checks are accepted only from STAGE (`10.1.0.6`) smoke runs.
-- Track outcomes in `docs/eadrese-stage-test-matrix.md` (odoo-infra repo root).
+## Validation status (2026-04-11, divtest.vraa.gov.lv)
 
-## Usage (building envelope)
-```php
-use LatvianEinvoice\Attachment;
-use LatvianEinvoice\Client;
-use LatvianEinvoice\Config;
-use LatvianEinvoice\Utils\Crypto;
+All core operations tested against the VRAA TEST endpoint with a real VISS Root CA certificate:
 
-$config = new Config(
-    'https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl',
-    clientCertPath: '/path/to/client.crt.pem',
-    clientKeyPath: '/path/to/client.key.pem',
-    certificatePath: '/path/to/client.crt.pem',
-    privateKeyPath: '/path/to/client.key.pem',
-    verifySsl: false,
-    defaultFrom: '_PRIVATE@<REG_NO>'
-);
+- `CertValidate` → `{"status":"ok"}`
+- `SendMessage` (DOC_EMPTY) → HTTP 200, MessageId returned
+- `GetMessageList` → HTTP 200, 10 headers
+- `GetMessage` → HTTP 200, `envelope_xml_len: 21241`
+- `receive_and_confirm` → HTTP 200, `attachments_count: 1`
+- `SearchAddresseeUnit(40103166694)` → `result_count: 1`
+- `GetPublicKeyList` → `key_count: 1`, RSA key returned
+- `GetNotificationList` → 25 notifications returned and confirmed
+- `GetInitialAddresseeRecordList` → 4606 state addressee records (auto-paginated)
+- `GetChangedAddresseeRecordList` → correct SOAP call; VRAA rate-limits rapid calls
+- `GetMessageServerConfirmation` → full `ServerConfirmationPart` with timestamps and VRAA signature
+- `ConfirmNotificationList` → `confirmed_ids` match requested IDs
 
-$client = new Client($config);
+## Known VRAA limitations
 
-$attachments = [new Attachment('inv.xml', '<xml/>', 'application/xml')];
-[$encKeyB64, $thumbB64, $symKey, $symIv] = Crypto::deriveEncryptionFieldsOaepCbc(
-    file_get_contents('/path/to/recipient.crt.pem')
-);
+| Error | Cause | Fix |
+|-------|-------|-----|
+| PSS.024 | `_PRIVATE@` sender cannot route to `_PRIVATE@` recipient in PROD | VRAA must activate `_DEFAULT@` sender address |
+| PSS.045 | EINVOICE from `_PRIVATE@` sender not authorised | Same — requires `_DEFAULT@` activation |
+| Rate limit on `GetInitialAddresseeRecordList` | VRAA enforces minimum wait between full syncs | Implement cooldown in calling code |
+| Rate limit on `GetChangedAddresseeRecordList` | Same minimum-wait rule | Use reasonable polling intervals |
+| `ValidateEAddress` / `GetAddresseeUnit` | Government-account permission required | Use `SearchAddresseeUnit` for lookups |
 
-[$envelope, $attachmentsInput, $messageId] = $client->buildEnvelope(
-    recipients: ['_PRIVATE@<RECIPIENT>'],
-    documentKindCode: 'DOC_EMPTY',
-    subject: 'Hello',
-    bodyText: 'Test',
-    attachments: $attachments,
-    encryptionKeyB64: $encKeyB64,
-    recipientThumbprintB64: $thumbB64,
-    symmetricKeyBytes: $symKey,
-    symmetricIvBytes: $symIv,
-    encryptionMode: 'oaep_cbc'
-);
-```
+## XAdES signing
 
-## Usage (direct SOAP SendMessage)
-Requires mTLS files (`DIV_CLIENT_CERT`, `DIV_CLIENT_KEY`) and signing files (`DIV_SIGN_CERT`, `DIV_SIGN_KEY`).
-By default, the example uses TEST WSDL and `DIV_VERIFY_SSL=0`.
+The `DivEnvelopeSigner` produces a WS-Security + XAdES-BES signature matching the Java/.NET profile:
+- `<SignedProperties Id="ds-SignedProperties">` — fixed element name (no random suffix)
+- `<Signature Id="SenderSignature">` — stable ID
+- Inclusive C14N (`http://www.w3.org/TR/2001/REC-xml-c14n-20010315`) for `SignedInfo`
+- `ContentReference` value `"0"` (integer string, not filename/URN)
+
+## Quick start (Docker, recommended)
 
 ```bash
-composer install
-DIV_WSDL_URL='https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl' \
-DIV_CLIENT_CERT='/path/to/client.crt.pem' \
-DIV_CLIENT_KEY='/path/to/client.key.pem' \
-DIV_SIGN_CERT='/path/to/client.crt.pem' \
-DIV_SIGN_KEY='/path/to/client.key.pem' \
-DIV_SENDER='_PRIVATE@<REG_NO>' \
-DIV_RECIPIENT='_PRIVATE@<RECIPIENT_REG_NO>' \
-DIV_VERIFY_SSL=0 \
+# 1. Extract PEM files from p12 (once)
+./test.sh --certs
+
+# 2. Build Docker image (once)
+./test.sh --build
+
+# 3. Copy and edit env file
+cp .env.test.example .env.test
+# Edit .env.test — set DIV_SENDER, DIV_RECIPIENT, cert paths, etc.
+
+# 4. Run any example
+./test.sh cert_validate
+./test.sh send
+./test.sh get_message_list
+./test.sh receive_and_confirm
+./test.sh search_addressee
+./test.sh poll_notifications
+./test.sh get_public_key_list
+./test.sh get_addressee_list          # full initial sync
+DIV_LAST_VERSION=10405155 ./test.sh get_addressee_list  # delta sync
+./test.sh get_server_confirm          # requires DIV_MSG_ID=<id>
+./test.sh validate_eaddress           # requires government account
+```
+
+## Quick start (bare PHP, no Composer)
+
+```bash
+export DIV_WSDL_URL='https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl'
+export DIV_CLIENT_CERT='/path/to/client.crt.pem'
+export DIV_CLIENT_KEY='/path/to/client.key.pem'
+export DIV_SIGN_CERT='/path/to/client.crt.pem'
+export DIV_SIGN_KEY='/path/to/client.key.pem'
+export DIV_SENDER='_PRIVATE@<REG_NO>'
+export DIV_VERIFY_SSL=0
+
+php examples/soap_cert_validate.php
 php examples/soap_send.php
-```
-
-Running via Docker:
-```bash
-sudo docker run --rm --network host -v /path/to/php:/app -w /app <php-image-with-soap-curl-xsl> php examples/soap_send.php
-```
-Example STAGE image used in smoke tests: `php82-cli-xsl`.
-
-## Usage (direct SOAP receive + optional confirm)
-```bash
-composer install
-DIV_WSDL_URL='https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl' \
-DIV_CLIENT_CERT='/path/to/client.crt.pem' \
-DIV_CLIENT_KEY='/path/to/client.key.pem' \
-DIV_SIGN_CERT='/path/to/client.crt.pem' \
-DIV_SIGN_KEY='/path/to/client.key.pem' \
-DIV_SENDER='_PRIVATE@<REG_NO>' \
-DIV_VERIFY_SSL=0 \
-DIV_CONFIRM=1 \
+php examples/soap_get_message_list.php
 php examples/soap_receive_and_confirm.php
 ```
 
-## Composer
-```bash
-composer install
+## Usage examples
+
+### Send a message
+```php
+use LatvianEinvoice\Client;
+use LatvianEinvoice\Config;
+
+$config = new Config(
+    'https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl',
+    clientCertPath:  '/path/to/client.crt.pem',
+    clientKeyPath:   '/path/to/client.key.pem',
+    certificatePath: '/path/to/client.crt.pem',
+    privateKeyPath:  '/path/to/client.key.pem',
+    verifySsl:       false,
+    defaultFrom:     '_PRIVATE@<REG_NO>',
+);
+
+$client = new Client($config);
+$result = $client->sendMessageSoap(
+    recipients:       ['_PRIVATE@<RECIPIENT>'],
+    documentKindCode: 'DOC_EMPTY',
+    subject:          'Test',
+    bodyText:         'Hello from PHP SDK',
+);
+echo $result['message_id'];
 ```
 
-STAGE smoke command:
-```powershell
-./scripts/test_eadrese_receive_confirm_stage.ps1 -PhpOnly -Confirm
+### Receive and confirm
+```php
+$result = $client->getMessageListSoap(maxResultCount: 10);
+// $result['body']['MessageHeaders'] — array of message headers
+
+$msg = $client->getMessageSoap($messageId);
+// $msg['envelope_xml'] — raw DIV XML envelope
+
+$client->confirmMessageSoap($messageId);
+```
+
+### Addressee directory (full + delta)
+```php
+// Full initial sync — auto-paginates through all records
+$result = $client->getInitialAddresseeRecordListSoap(allPages: true);
+// $result['records'] — list of addressee records
+// $result['continuation_token'] — non-null if more pages remain
+
+// Incremental delta sync from a known version
+$result = $client->getChangedAddresseeRecordListSoap(lastVersion: 10405155);
+// $result['records'] — only records changed since that version
+```
+
+### Server confirmation
+```php
+$result = $client->getMessageServerConfirmationSoap($messageId);
+// $result['body']['ServerConfirmationPart']['ServerTransportMetadata']['ServerReceivedTime']
+```
+
+### Notifications
+```php
+$result = $client->pollNotificationsSoap(maxItems: 50, autoConfirm: true);
+// $result['items'] — notification list; confirmed automatically if autoConfirm=true
+```
+
+## File layout
+
+```
+src/
+  Client.php                  — public API (all operations)
+  Config.php                  — connection config
+  Attachment.php              — attachment value object
+  Soap/
+    DirectSoapClient.php      — raw SOAP request builders + parsers
+    DivEnvelopeSigner.php     — XAdES/WSSE signature for outbound envelopes
+    WsseSigner.php            — WS-Security header for management operations
+  Utils/
+    Crypto.php                — AES-GCM / OAEP-CBC encryption helpers
+
+examples/
+  soap_cert_validate.php
+  soap_send.php
+  soap_get_message_list.php
+  soap_get_message.php
+  soap_receive_and_confirm.php
+  soap_search_addressee.php
+  soap_poll_notifications.php
+  soap_confirm_notification_list.php
+  soap_get_public_key_list.php
+  soap_get_addressee_list.php           — initial + delta sync (DIV_LAST_VERSION)
+  soap_validate_eaddress.php            — government accounts only
+  soap_get_message_server_confirmation.php
+
+test.sh                       — Docker-based test runner
+.env.test.example             — environment variable template
 ```
 
 ## Notes
-- This code is experimental and not production ready.
-- Do not copy private keys or certificates into the repository.
 
-## Support PHP Development
-- https://revolut.me/guntisha2j
+- No Composer required. The bundled PSR-4 autoloader resolves `LatvianEinvoice\*` from `src/`.
+- Private keys, certificates, and `.env.test` are excluded from version control via `.gitignore`.
+- VRAA PROD endpoint (`div.vraa.gov.lv`) must not be used for testing — VRAA explicitly prohibits it.
+  Use `divtest.vraa.gov.lv` with the TEST certificate for all integration work.
+- To send messages in production, VRAA must activate a `_DEFAULT@<regno>` sender address for each company.
+  Until then, outbound routing will return PSS.024.
