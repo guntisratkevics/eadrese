@@ -112,12 +112,19 @@ php examples/soap_receive_and_confirm.php
 use LatvianEinvoice\Client;
 use LatvianEinvoice\Config;
 
+// clientCertPath / clientKeyPath  — used for mTLS (curl CURLOPT_SSLCERT/SSLKEY, transport layer)
+// certificatePath / privateKeyPath — used for XML signing (XAdES/WSSE envelope signature, application layer)
+// For VRAA DIV both pairs are the same certificate; split params exist for setups where
+// the TLS client certificate and the signing certificate differ.
+$cert = '/path/to/client.crt.pem';
+$key  = '/path/to/client.key.pem';
+
 $config = new Config(
     'https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl',
-    clientCertPath:  '/path/to/client.crt.pem',
-    clientKeyPath:   '/path/to/client.key.pem',
-    certificatePath: '/path/to/client.crt.pem',
-    privateKeyPath:  '/path/to/client.key.pem',
+    clientCertPath:  $cert,  // mTLS
+    clientKeyPath:   $key,   // mTLS
+    certificatePath: $cert,  // XML signing
+    privateKeyPath:  $key,   // XML signing
     verifySsl:       false,
     defaultFrom:     '_PRIVATE@<REG_NO>',
 );
