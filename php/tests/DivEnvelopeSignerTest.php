@@ -133,7 +133,6 @@ final class DivEnvelopeSignerTest extends TestCase
         $propsAlg = trim((string)$xpath->evaluate('string(.//ds:Transform/@Algorithm)', $propsRef));
         $this->assertSame(self::NS_EXC_C14N, $propsAlg);
 
-        // Verify digest values.
         $b64sha512 = static fn(string $data): string => base64_encode(hash('sha512', $data, true));
         $normalizedB64 = static fn(string $data): string => preg_replace('/\s+/', '', $data) ?? $data;
 
@@ -167,7 +166,6 @@ final class DivEnvelopeSignerTest extends TestCase
         $this->assertSame($b64sha512($propsC14n), $normalizedB64($propsDv));
         $this->assertStringContainsString("\n", $propsDv);
 
-        // Verify RSA signature over SignedInfo (inclusive C14N).
         $signedInfo = $xpath->query('.//ds:SignedInfo[1]', $sig)?->item(0);
         $this->assertInstanceOf(DOMElement::class, $signedInfo);
         $siC14n = $signedInfo->C14N(false, false);
@@ -184,7 +182,7 @@ final class DivEnvelopeSignerTest extends TestCase
         $this->assertSame(1, $verifyOk);
     }
 
-    public function test_sign_combined_envelope_uses_section_digest_hints(): void
+    public function test_sign_combined_envelope_prefers_matching_hints_only(): void
     {
         [$certPem, $keyPem] = $this->generateSelfSigned();
 
@@ -223,7 +221,12 @@ final class DivEnvelopeSignerTest extends TestCase
         $confirmations->appendChild($entry);
         $root->appendChild($doc->createElementNS(self::NS_DIV, 'Signatures'));
 
-        $senderHint = base64_encode(str_repeat("\x01", 64));
+        $senderC14n = $sender->C14N(true, false);
+        $this->assertNotFalse($senderC14n);
+        $serverC14n = $server->C14N(true, false);
+        $this->assertNotFalse($serverC14n);
+
+        $senderHint = base64_encode(hash('sha512', $senderC14n, true));
         $serverHint = base64_encode(str_repeat("\x02", 64));
 
         $sig = DivEnvelopeSigner::signCombinedEnvelope(
@@ -255,6 +258,7 @@ final class DivEnvelopeSignerTest extends TestCase
         $senderDv = (string)$xpath->evaluate('string(.//ds:DigestValue)', $refByUri['#SenderSection']);
         $serverDv = (string)$xpath->evaluate('string(.//ds:DigestValue)', $refByUri['#ServerSection']);
         $this->assertSame($senderHint, $normalized($senderDv));
-        $this->assertSame($serverHint, $normalized($serverDv));
+        $this->assertNotSame($serverHint, $normalized($serverDv));
+        $this->assertSame(base64_encode(hash('sha512', $serverC14n, true)), $normalized($serverDv));
     }
 }

@@ -1,6 +1,7 @@
 # PHP client for Latvia's e-Address (DIV / VUS)
 
 Direct SOAP client for the VRAA DIV unified interface — mTLS, WSSE, XAdES envelope signing, message send/receive, attachment encryption, and addressee directory sync.
+This PHP SDK is standalone and is not coupled to the Odoo module.
 No Composer dependencies required for production use; a PSR-4 autoloader is bundled.
 
 ## Implemented operations
@@ -11,6 +12,7 @@ No Composer dependencies required for production use; a PSR-4 autoloader is bund
 | `SendMessage` | `sendMessageSoap()` | ✅ Validated |
 | `GetMessageList` | `getMessageListSoap()` | ✅ Validated |
 | `GetMessage` | `getMessageSoap()` | ✅ Validated |
+| `GetMessage + structured summary` | `getMessageAndFileInfoSoap()` | ✅ Local helper |
 | `GetAttachmentSection` | `getAttachmentSectionSoap()` | ✅ Validated |
 | `ConfirmMessage` | `confirmMessageSoap()` | ✅ Validated |
 | `SearchAddresseeUnit` | `searchAddresseeSoap()` | ✅ Validated |
@@ -26,22 +28,20 @@ No Composer dependencies required for production use; a PSR-4 autoloader is bund
 > **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
 > Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `SearchAddresseeUnit` instead.
 
-## Validation status (2026-04-11, divtest.vraa.gov.lv)
+## Validation status (2026-04-12, divtest.vraa.gov.lv)
 
-All core operations tested against the VRAA TEST endpoint with a real VISS Root CA certificate:
+Core operations have been exercised against the VRAA TEST endpoint from the Docker runner:
 
 - `CertValidate` → `{"status":"ok"}`
-- `SendMessage` (DOC_EMPTY) → HTTP 200, MessageId returned
-- `GetMessageList` → HTTP 200, 10 headers
-- `GetMessage` → HTTP 200, `envelope_xml_len: 21241`
+- `SendMessage` (DOC_EMPTY) → HTTP 200, `MessageId` returned
+- `GetMessageList` → HTTP 200
 - `receive_and_confirm` → HTTP 200, `attachments_count: 1`
 - `SearchAddresseeUnit` → addressee found in directory
 - `GetPublicKeyList` → `key_count: 1`, RSA key returned
-- `GetNotificationList` → 25 notifications returned and confirmed
-- `GetInitialAddresseeRecordList` → full state addressee directory returned (auto-paginated)
-- `GetChangedAddresseeRecordList` → correct SOAP call; VRAA rate-limits rapid calls
-- `GetMessageServerConfirmation` → full `ServerConfirmationPart` with timestamps and VRAA signature
-- `ConfirmNotificationList` → `confirmed_ids` match requested IDs
+- `GetNotificationList` / `poll_notifications` → HTTP 200, notifications returned and confirmed
+- `SendMessage` + immediate `GetMessageServerConfirmation` request reaches TEST correctly, but VRAA may still return `Ziņojuma apstrādes apstiprinājums nav pieejams.` until the confirmation is generated
+
+No private certificates, keys, or local environment files are tracked in Git. The examples below use placeholders only.
 
 ## Known VRAA limitations
 
@@ -86,7 +86,34 @@ cp .env.test.example .env.test
 DIV_LAST_VERSION=10405155 ./test.sh get_addressee_list  # delta sync
 ./test.sh get_server_confirm          # requires DIV_MSG_ID=<id>
 ./test.sh validate_eaddress           # requires government account
+./test.sh lint
+./test.sh unit
+./test.sh vraa_smoke
 ```
+
+### Docker test modes
+
+- `./test.sh lint`
+  Runs `php -l` for all `src/`, `examples/`, and `tests/` files in Docker.
+- `./test.sh unit`
+  Runs PHPUnit in Docker. The runner copies the repo into a writable temp dir and executes `composer install` there, so no local PHP or Composer install is required.
+- `./test.sh vraa_smoke`
+  Runs `lint`, `unit`, and then the VRAA TEST integration matrix:
+  - `cert_validate`
+  - `search_addressee`
+  - `get_message_list`
+  - `get_notification_list`
+  - `poll_notifications`
+  - `get_public_key_list` when `DIV_RECIPIENTS` or `DIV_RECIPIENT` is set
+  - `send` when `DIV_RECIPIENT` is set
+  - `test_einvoice.php` when `DIV_RECIPIENT` is set
+  - `get_message` when `DIV_MESSAGE_ID` is set
+  - `receive_and_confirm` unless disabled
+  - `get_server_confirm` automatically for the just-sent smoke message
+- Restricted VRAA operations are skipped by default because commercial/private accounts usually do not have permission:
+  - `get_addressee_list`
+  - `validate_eaddress`
+  Enable them explicitly with `DIV_INCLUDE_RESTRICTED_OPS=1`.
 
 ## Quick start (bare PHP, no Composer)
 

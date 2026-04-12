@@ -7,6 +7,7 @@ namespace LatvianEinvoice;
 use LatvianEinvoice\Envelope\Builder;
 use LatvianEinvoice\Soap\DirectSoapClient;
 use LatvianEinvoice\Soap\DivMessageDecoder;
+use LatvianEinvoice\Soap\DivMessageSummary;
 use LatvianEinvoice\Utils\Crypto;
 
 final class Client
@@ -170,6 +171,27 @@ final class Client
     }
 
     /**
+     * Direct SOAP GetMessage + structured message/file info extracted from EnvelopeXml.
+     *
+     * Convenience helper for callers who want ready-to-use document, sender,
+     * recipient, and attachment metadata without manually parsing the DIV envelope.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function getMessageAndFileInfoSoap(
+        string $messageId,
+        bool $stitchSections = true,
+        bool $decrypt = true
+    ): ?array {
+        $result = $this->getMessageDecodedSoap($messageId, $stitchSections, $decrypt);
+        $body = is_array($result['body'] ?? null) ? $result['body'] : null;
+        if (!$body || array_key_exists('Fault', $body)) {
+            return null;
+        }
+        return DivMessageSummary::build($body);
+    }
+
+    /**
      * Direct SOAP GetMessageList + first message fetch convenience (PHP equivalent of Python get_next_message()).
      *
      * @return array{status:int, body:array|null, raw:string, request_xml:string, confirmed?:bool, confirm_error?:string}|null
@@ -254,7 +276,7 @@ final class Client
     }
 
     /**
-     * Poll notifications with paging + optional auto-confirm behavior (Odoo parity helper).
+     * Poll notifications with paging + optional auto-confirm behavior.
      *
      * @return array{items:list<array<string,mixed>>,has_more_data:bool,confirmed_ids:list<int>}
      */
@@ -328,7 +350,7 @@ final class Client
     }
 
     /**
-     * Certificate/connectivity validation helper (mirrors Odoo cert_status behavior).
+     * Certificate/connectivity validation helper for smoke checks and setup verification.
      *
      * @param string[] $lookupValues
      * @return array{status:string,message:string,lookup_value?:string,attempted_values:array<int,string>,errors?:array<int,string>}
@@ -411,7 +433,6 @@ final class Client
         $perRecipientEntries = null;
 
         if ($modulusB64 !== '' && $exponentB64 !== '') {
-            // Single-recipient public key provided manually — use legacy single-key path.
             if (trim((string)$thumbprint) === '') {
                 throw new \RuntimeException(
                     'recipientThumbprintB64 is required when recipientPublicKeyModulusB64/ExponentB64 are provided'
@@ -436,8 +457,6 @@ final class Client
                 }
             }
         } elseif ($documentKindCode === 'EINVOICE' && $encryptionKey === null) {
-            // EINVOICE without explicit encryption params: auto-fetch public keys for all recipients
-            // and build per-recipient EncryptionInfo (mirrors Python's _resolve_public_key_map flow).
             $normalizedForFetch = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
             $soap = new DirectSoapClient($this->config);
             $pkResult = $soap->getPublicKeyList($normalizedForFetch);

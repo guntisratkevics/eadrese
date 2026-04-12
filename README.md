@@ -9,24 +9,34 @@ Status / caveats
 - Cryptographic and protocol details are still being validated against the official clients.
 - Response signature and OCSP validation are best-effort.
 
-## Validation Status (as of 2026-02-20)
-Tested and working
-- Python crypto/envelope test suite (`tests/test_crypto.py`) passes.
-- Encrypted `text/*` MIME normalization is aligned in Python and PHP envelope builders (`application/octet-stream` for encrypted text attachments).
-- Python receive/decrypt flow (`GetMessageList` + `GetMessage` + `GetAttachmentSection`) and DIV AES-CBC decrypt path were validated on STAGE with real inbox messages (including sectioned payloads).
-- Python `ConfirmMessage` was validated on STAGE and consumed inbox messages successfully.
-- PHP direct SOAP `SendMessage` works from STAGE (HTTP 200, MessageId returned).
-- PHP direct SOAP `GetMessageList` works from STAGE (HTTP 200 response shape validated).
-- PHP `ConfirmMessage` was validated on STAGE (manual + scripted runs, HTTP 200, inbox consumption confirmed).
+## Implemented operations
 
-Implemented but not yet validated end-to-end
-- Full long-run stress matrix for all attachment variants via PHP path (single-message and scripted smoke are validated).
-- GCM attachment send path still has schema/profile caveats in some clients; `oaep_cbc` remains the safer mode for attachment sends.
+| Operation | Method | Status |
+|-----------|--------|--------|
+| `SendMessage` | `client.send_message()` | ✅ |
+| `GetMessageList` | `client.get_message_list()` | ✅ |
+| `GetMessage` | `client.get_message()` | ✅ |
+| `GetAttachmentSection` | internal (chunked attachment fetch) | ✅ |
+| `ConfirmMessage` | `client.confirm_message()` | ✅ |
+| `SearchAddresseeUnit` | `client.search_addressee()` | ✅ |
+| `GetPublicKeyList` | internal (per-recipient EINVOICE encryption) | ✅ |
+| `CertValidate` | `client.cert_validate()` | ✅ (via SearchAddresseeUnit) |
+| `GetNotificationList` | `client.get_notification_list()` | ✅ |
+| `ConfirmNotificationList` | `client.confirm_notification_list()` | ✅ |
+| `GetInitialAddresseeRecordList` | `client.get_initial_addressee_record_list()` | ✅ |
+| `GetChangedAddresseeRecordList` | `client.get_changed_addressee_record_list()` | ✅ |
+| `GetMessageServerConfirmation` | `client.get_message_server_confirmation()` | ✅ |
+| `ValidateEAddress` | `client.validate_eaddress()` | ⚠️ Government accounts only |
+| `GetAddresseeUnit` | `client.get_addressee_unit()` | ⚠️ Government accounts only |
 
-Release gate (STAGE-only)
-- Local unit tests are quick checks only.
-- Functional validation is accepted only from STAGE (`10.1.0.6`) runs.
-- The authoritative matrix is `docs/eadrese-stage-test-matrix.md` in the `odoo-infra` repo.
+> **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
+> Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `search_addressee()` instead.
+
+## Validation status (2026-04-11)
+- Unit tests (`pytest`) pass.
+- DIV AES-CBC and AES-GCM attachment decrypt/encrypt paths validated with real inbox messages.
+- `ConfirmMessage` (XAdES signature) validated end-to-end.
+- GCM attachment send path still has schema/profile caveats in some clients; `oaep_cbc` remains the safer mode.
 
 ## Support / Donate (Overall)
 If this SDK helps your work and you want to support further development:
@@ -103,7 +113,7 @@ cfg = EAddressConfig(
     client_id="YOUR_ID",
     client_secret="YOUR_SECRET",
     wsse_signing=True,
-    wsdl_url="https://div.vraa.gov.lv/UnifiedService.svc?wsdl",
+    wsdl_url="https://div.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
     token_url="https://div.vraa.gov.lv/Auth/token",
     client_cert_path="/path/to/client.crt.pem",
     client_key_path="/path/to/client.key.pem",
@@ -119,12 +129,13 @@ cfg = EAddressConfig(
 
 ## PHP client
 An experimental PHP client lives under `php/`.
+It is a standalone SDK and is not coupled to the Odoo module.
 It focuses on direct SOAP (mTLS + WSSE + DIV signing) flows and no longer includes the Java sidecar-dependent variant.
 Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage`
 are implemented; receive/decrypt/confirm smoke is validated, while broader stress coverage is still recommended.
+See `php/README.md` for Docker-based testing and PHP-specific usage notes.
 
 ## Testing
-Local quick checks (not release gates):
 ```bash
 pytest
 ```
@@ -133,13 +144,6 @@ pytest
 cd php
 composer install
 composer test
-```
-
-Required release validation (STAGE):
-```powershell
-./scripts/sync_eadrese_python_stage.ps1
-./scripts/test_eadrese_receive_confirm_stage.ps1 -PythonOnly -Confirm
-./scripts/test_eadrese_receive_confirm_stage.ps1 -PhpOnly -Confirm
 ```
 
 ### Support Python Development

@@ -10,6 +10,7 @@ __pycache__/
 # PHP SDK
 php/vendor/
 php/.env.test
+php/.docker-cache/
 php/.test-certs/
 php/.tmp_*
 php/test_einvoice.php

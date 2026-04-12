@@ -73,7 +73,6 @@ final class DivEnvelopeSigner
         $sigEl->appendChild($signedInfoEl);
 
         $canonEl = $doc->createElementNS(self::NS_DS, 'ds:CanonicalizationMethod');
-        // Match Java/Python: SignedInfo uses inclusive C14N (C14N 1.0).
         $canonEl->setAttribute('Algorithm', self::NS_C14N);
         $signedInfoEl->appendChild($canonEl);
 
@@ -81,12 +80,11 @@ final class DivEnvelopeSigner
         $sigMethodEl->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512');
         $signedInfoEl->appendChild($sigMethodEl);
 
-        // Reference: SenderDocument
         $refSender = $doc->createElementNS(self::NS_DS, 'ds:Reference');
         $refSender->setAttribute('URI', '#' . $senderDocId);
         $transforms = $doc->createElementNS(self::NS_DS, 'ds:Transforms');
         $transform = $doc->createElementNS(self::NS_DS, 'ds:Transform');
-        // Use exclusive C14N for SenderDocument — matches the Python Odoo client and the official Java
+        // Use exclusive C14N for SenderDocument — matches the Python reference client and the official Java
         // client behaviour (confirmed in latvian_einvoice/soap/client.py: EXCL_C14N for SenderDoc digest).
         // Inclusive C14N here caused PSS.045 rejections because namespace contamination from ancestor
         // elements (SOAP, UUI) differs between signing context and VRAA verification context.
@@ -116,12 +114,10 @@ final class DivEnvelopeSigner
         $refSp->appendChild($dvSp);
         $signedInfoEl->appendChild($refSp);
 
-        // SignatureValue placeholder (must come before KeyInfo/Object per xmldsig schema)
         $sigValueEl = $doc->createElementNS(self::NS_DS, 'ds:SignatureValue');
         $sigValueEl->setAttribute('Id', $signatureValueId);
         $sigEl->appendChild($sigValueEl);
 
-        // KeyInfo (must come before Object per xmldsig schema)
         $keyInfoEl = $doc->createElementNS(self::NS_DS, 'ds:KeyInfo');
         $keyInfoEl->setAttribute('Id', 'ds-KeyInfo');
         $sigEl->appendChild($keyInfoEl);
@@ -146,12 +142,9 @@ final class DivEnvelopeSigner
         }
         $keyInfoEl->appendChild($x509DataEl);
 
-        // XAdES QualifyingProperties + SignedProperties (must be inside ds:Object; ds:Object must come last)
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
-        // Match the official clients: use the `QualifyingProperties:QualifyingProperties` element name and
-        // declare both the prefix mapping and the default XAdES namespace on the element itself.
         $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties');
         $qpEl->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', self::NS_XADES);
         $qpEl->setAttribute('Target', '#' . $signatureId);
@@ -189,20 +182,12 @@ final class DivEnvelopeSigner
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
 
-        // Compute digests
-        // SenderDocument: exclusive C14N to match the Reference transform declared above.
-        // Exclusive C14N ensures the digest is the same whether the envelope is signed standalone
-        // or later embedded inside a SOAP body (namespace context from ancestor elements is excluded).
         $senderC14n = self::c14n($senderDoc, true, []);
         $dvSender->nodeValue = base64_encode(hash('sha512', $senderC14n, true));
 
-        // Digest SignedProperties: no Transform declared, so VRAA verifies with its default.
-        // .NET SignedXml default (no Transform) = inclusive C14N. Test both variants:
-        // TODO: determine if VRAA uses inclusive or exclusive C14N here.
         $spC14n = self::c14n($spEl, false, []);
         $dvSp->nodeValue = base64_encode(hash('sha512', $spC14n, true));
 
-        // Sign SignedInfo (inclusive C14N)
         $siC14n = self::c14n($signedInfoEl, false, []);
         $sigRaw = '';
         $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA512);
@@ -213,14 +198,7 @@ final class DivEnvelopeSigner
     }
 
     /**
-     * Sign a combined DIV RecipientConfirmationPart (SenderSection + ServerSection + RecipientSection).
-     *
-     * This matches the official ConfirmMessage profile:
-     * - Inclusive C14N for SignedInfo and signed section digests
-     * - Exclusive C14N for SignedProperties digest
-     *
      * @param string[] $signedSectionIds
-     * @return \DOMElement The created ds:Signature element
      */
     public static function signCombinedEnvelope(
         \DOMDocument $doc,
@@ -260,7 +238,6 @@ final class DivEnvelopeSigner
             $combinedRoot->appendChild($signaturesEl);
         }
 
-        // Validate that all signed sections are present.
         foreach ($signedSectionIds as $sectionId) {
             $sectionId = (string)$sectionId;
             if ($sectionId === '') {
@@ -290,7 +267,6 @@ final class DivEnvelopeSigner
         $sigMethodEl->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512');
         $signedInfoEl->appendChild($sigMethodEl);
 
-        // Section references: SenderSection, ServerSection, RecipientSection entry Id.
         $sectionDigestNodes = [];
         foreach ($signedSectionIds as $sectionId) {
             $sectionId = (string)$sectionId;
@@ -317,10 +293,14 @@ final class DivEnvelopeSigner
             $sectionDigestNodes[$sectionId] = $dv;
         }
 
-        // Reference: SignedProperties
         $refSp = $doc->createElementNS(self::NS_DS, 'ds:Reference');
         $refSp->setAttribute('URI', '#' . $signedPropsId);
         $refSp->setAttribute('Type', 'http://uri.etsi.org/01903#SignedProperties');
+        $spTransforms = $doc->createElementNS(self::NS_DS, 'ds:Transforms');
+        $spTransform = $doc->createElementNS(self::NS_DS, 'ds:Transform');
+        $spTransform->setAttribute('Algorithm', self::NS_EXC_C14N);
+        $spTransforms->appendChild($spTransform);
+        $refSp->appendChild($spTransforms);
         $dm2 = $doc->createElementNS(self::NS_DS, 'ds:DigestMethod');
         $dm2->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmlenc#sha512');
         $refSp->appendChild($dm2);
@@ -328,12 +308,10 @@ final class DivEnvelopeSigner
         $refSp->appendChild($dvSp);
         $signedInfoEl->appendChild($refSp);
 
-        // SignatureValue placeholder (must come before KeyInfo/Object)
         $sigValueEl = $doc->createElementNS(self::NS_DS, 'ds:SignatureValue');
         $sigValueEl->setAttribute('Id', $signatureValueId);
         $sigEl->appendChild($sigValueEl);
 
-        // KeyInfo
         $keyInfoEl = $doc->createElementNS(self::NS_DS, 'ds:KeyInfo');
         $keyInfoEl->setAttribute('Id', 'ds-KeyInfo');
         $sigEl->appendChild($keyInfoEl);
@@ -358,12 +336,9 @@ final class DivEnvelopeSigner
         }
         $keyInfoEl->appendChild($x509DataEl);
 
-        // XAdES QualifyingProperties + SignedProperties (inside ds:Object; ds:Object must come last)
         $objEl = $doc->createElementNS(self::NS_DS, 'ds:Object');
         $sigEl->appendChild($objEl);
 
-        // Build XAdES subtree directly in the target document to avoid serializer-specific
-        // prefix rewrites across import/appendXML round-trips.
         $qpEl = $doc->createElementNS(self::NS_XADES, 'QualifyingProperties');
         $qpEl->setAttribute('Target', '#' . $signatureId);
         $qpEl->setAttribute('Id', 'ds-QualifyingProperties');
@@ -399,9 +374,6 @@ final class DivEnvelopeSigner
         $serialEl = $doc->createElementNS(self::NS_DS, 'ds:X509SerialNumber', $serial);
         $issuerSerialEl->appendChild($serialEl);
 
-        // Compute section digests. Match Java confirm behavior: section digests resolve
-        // as exclusive C14N even though the advertised Transform is inclusive C14N.
-        // Sender/Server digests can be inherited from source envelope signatures.
         foreach ($signedSectionIds as $sectionId) {
             $sectionId = (string)$sectionId;
             if ($sectionId === '') {
@@ -413,9 +385,6 @@ final class DivEnvelopeSigner
             }
             $c14n = self::c14n($target, true, []);
             $computedDigest = base64_encode(hash('sha512', $c14n, true));
-
-            // Source-envelope digest hints are useful for parity checks, but can become stale if
-            // netify/context normalization changes canonical bytes. Prefer computed digest on mismatch.
             $hintedDigest = trim((string)($sectionDigestHints[$sectionId] ?? ''));
             $digest = ($hintedDigest !== '' && $hintedDigest === $computedDigest)
                 ? $hintedDigest
@@ -424,11 +393,9 @@ final class DivEnvelopeSigner
             $sectionDigestNodes[$sectionId]->nodeValue = self::wrapDigestText($digest);
         }
 
-        // Match Java confirm profile: SignedProperties digest is exclusive C14N with ds prefix in scope.
         $spC14n = self::c14n($spEl, true, ['ds']);
         $dvSp->nodeValue = self::wrapDigestText(base64_encode(hash('sha512', $spC14n, true)));
 
-        // Java/Metro serializes long digest values with 76-char line wraps.
         $xpath = new \DOMXPath($doc);
         $xpath->registerNamespace('ds', self::NS_DS);
         $digestNodes = $xpath->query('.//ds:DigestValue', $sigEl);
@@ -440,7 +407,6 @@ final class DivEnvelopeSigner
             }
         }
 
-        // Sign SignedInfo (inclusive C14N).
         $siC14n = self::c14n($signedInfoEl, false, []);
         $sigRaw = '';
         $ok = openssl_sign($siC14n, $sigRaw, $priv, OPENSSL_ALGO_SHA512);
@@ -456,8 +422,7 @@ final class DivEnvelopeSigner
         \DOMElement $signature,
         Config $cfg,
         bool $refreshAllReferences = true
-    ): void
-    {
+    ): void {
         if (!$cfg->privateKeyPath) {
             throw new \RuntimeException('DIV signing requires privateKeyPath');
         }
@@ -491,8 +456,7 @@ final class DivEnvelopeSigner
     public static function refreshReferenceDigestsInContext(
         \DOMElement $signature,
         bool $signedPropertiesOnly = false
-    ): void
-    {
+    ): void {
         $doc = $signature->ownerDocument;
         if (!$doc instanceof \DOMDocument || !$doc->documentElement instanceof \DOMElement) {
             return;
@@ -566,7 +530,6 @@ final class DivEnvelopeSigner
      */
     private static function c14n(\DOMElement $el, bool $exclusive, array $inclusivePrefixes): string
     {
-        // DOMNode::C14N only accepts InclusiveNamespace prefixes in exclusive mode (and emits notices otherwise).
         $prefixes = $exclusive && !empty($inclusivePrefixes) ? $inclusivePrefixes : null;
         $c14n = $el->C14N($exclusive, false, null, $prefixes);
         if ($c14n === false) {

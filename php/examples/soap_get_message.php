@@ -49,6 +49,7 @@ $cfg = new Config(
 
 $client = new Client($cfg);
 $result = $client->getMessageSoap($messageId);
+$messageInfo = $client->getMessageAndFileInfoSoap($messageId);
 
 $debugDir = getenv('DIV_DEBUG_DIR') ?: '';
 if ($debugDir !== '') {
@@ -69,6 +70,7 @@ $out = [
     'confirmation_name' => $confirmationName,
     'recipients_count' => is_array($recipients) ? count($recipients) : null,
     'envelope_xml_len' => is_string($envelopeXml) ? strlen($envelopeXml) : null,
+    'message_info' => $messageInfo,
 ];
 
 if ((getenv('DIV_PRINT_ENVELOPE') ?: '0') !== '0') {
@@ -81,4 +83,3 @@ if (getenv('DIV_DEBUG_RAW') && ($out['status'] ?? 0) !== 200) {
     $out['raw_preview'] = substr($raw, 0, 2000);
 }
 echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
-
