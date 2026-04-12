@@ -23,6 +23,7 @@ def build_envelope(
     *,
     encryption_key_b64: str | None = None,
     recipient_thumbprint_b64: str | None = None,
+    recipient_entries: Optional[Sequence[Mapping[str, object]]] = None,
     trace_text: str | None = "Created",
     notify_sender_on_delivery: bool = False,
     symmetric_key_bytes: Optional[bytes] = None,
@@ -115,22 +116,43 @@ def build_envelope(
     if files:
         document_metadata["PayloadReference"] = {"File": files}
     
-    recipient_entries = []
-    for r_code in recipients_list:
-        entry = {
-            "RecipientE-Address": r_code,
+    transport_recipient_entries = []
+    for entry in recipient_entries or []:
+        if not isinstance(entry, Mapping):
+            continue
+        recipient_eaddress = str(entry.get("RecipientE-Address") or "").strip()
+        if not recipient_eaddress:
+            continue
+        transport_entry = {
+            "RecipientE-Address": recipient_eaddress,
         }
-        if encryption_key_b64 and recipient_thumbprint_b64:
-            entry["EncryptionInfo"] = {
-                "Key": encryption_key_b64,
-                "CertificateThumbprint": recipient_thumbprint_b64,
+        encryption_info = entry.get("EncryptionInfo")
+        if isinstance(encryption_info, Mapping):
+            encryption_key = str(encryption_info.get("Key") or "").strip()
+            certificate_thumbprint = str(encryption_info.get("CertificateThumbprint") or "").strip()
+            if encryption_key and certificate_thumbprint:
+                transport_entry["EncryptionInfo"] = {
+                    "Key": encryption_key,
+                    "CertificateThumbprint": certificate_thumbprint,
+                }
+        transport_recipient_entries.append(transport_entry)
+
+    if not transport_recipient_entries:
+        for r_code in recipients_list:
+            entry = {
+                "RecipientE-Address": r_code,
             }
-        recipient_entries.append(entry)
+            if encryption_key_b64 and recipient_thumbprint_b64:
+                entry["EncryptionInfo"] = {
+                    "Key": encryption_key_b64,
+                    "CertificateThumbprint": recipient_thumbprint_b64,
+                }
+            transport_recipient_entries.append(entry)
 
     sender_transport = {
         "SenderE-Address": sender_e_address or (recipients_list[0] if recipients_list else "_DEFAULT@00000000000"),
         "SenderRefNumber": message_id,
-        "Recipients": {"RecipientEntry": recipient_entries},
+        "Recipients": {"RecipientEntry": transport_recipient_entries},
         "NotifySenderOnDelivery": notify_sender_on_delivery,
         "Priority": "normal",
     }

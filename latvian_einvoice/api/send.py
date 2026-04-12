@@ -1,8 +1,9 @@
 import base64
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 from zeep.helpers import serialize_object
 
 from ..attachments import Attachment
@@ -11,6 +12,7 @@ from ..errors import EAddressSoapError
 from ..soap.envelope import build_envelope
 from ..auth import TokenProvider
 from ..soap.client import SoapClient
+from .addressbook import get_public_key_list
 from ..utils_crypto import (
     derive_encryption_fields,
     rsa_public_key_from_modexp,
@@ -22,6 +24,196 @@ logger = logging.getLogger(__name__)
 
 _MAX_MESSAGE_FILES_SIZE = 0x400000  # 4 MiB
 _ATTACHMENT_SECTION_SIZE = 0x400000  # 4 MiB
+_BASE64_BINARY_FIELDS = {
+    "CertificateThumbprint",
+    "CipherText",
+    "Contents",
+    "DigestValue",
+    "Exponent",
+    "IV",
+    "Key",
+    "Modulus",
+    "SignatureValue",
+    "X509Certificate",
+    "X509SKI",
+}
+
+
+def _safe_debug_token(value: str | None, fallback: str = "message") -> str:
+    text = (value or "").strip()
+    safe = "".join(ch if ch.isalnum() else "_" for ch in text)
+    return safe or fallback
+
+
+def _write_send_debug_manifest(
+    *,
+    message_id: str,
+    sender_address: str | None,
+    recipients: list[str],
+    document_kind_code: str,
+    notify_sender_on_delivery: bool,
+    encryption_mode: str,
+    encryption_key_b64: str | None,
+    recipient_thumbprint_b64: str | None,
+    symmetric_key_bytes: bytes | None,
+    symmetric_iv_bytes: bytes | None,
+    attachments: list[Attachment],
+    cfg: EAddressConfig,
+    recipient_transport_entries: Sequence[Mapping[str, Any]] | None = None,
+) -> None:
+    debug_dir = (os.environ.get("EADRESE_DEBUG_DIR") or "").strip()
+    if not debug_dir:
+        return
+    try:
+        out_dir = Path(debug_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = _safe_debug_token(message_id)
+        manifest = {
+            "message_id": message_id,
+            "sender_address": sender_address,
+            "recipients": recipients,
+            "document_kind_code": document_kind_code,
+            "notify_sender_on_delivery": notify_sender_on_delivery,
+            "encryption_mode": encryption_mode,
+            "has_encryption_key": bool(encryption_key_b64),
+            "has_recipient_thumbprint": bool(recipient_thumbprint_b64),
+            "has_symmetric_key": bool(symmetric_key_bytes),
+            "has_symmetric_iv": bool(symmetric_iv_bytes),
+            "attachment_count": len(attachments),
+            "attachment_names": [getattr(item, "file_name", None) for item in attachments],
+            "vid_subaddress_auto": bool(getattr(cfg, "vid_subaddress_auto", False)),
+            "vid_subaddress": getattr(cfg, "vid_subaddress", None),
+            "default_from": getattr(cfg, "default_from", None),
+            "token_url": getattr(cfg, "token_url", None),
+            "recipient_transport_entries": [],
+        }
+        for entry in recipient_transport_entries or []:
+            if not isinstance(entry, Mapping):
+                continue
+            encryption_info = entry.get("EncryptionInfo")
+            manifest["recipient_transport_entries"].append(
+                {
+                    "recipient": entry.get("RecipientE-Address"),
+                    "has_encryption_info": isinstance(encryption_info, Mapping),
+                    "has_key": bool(isinstance(encryption_info, Mapping) and encryption_info.get("Key")),
+                    "thumbprint_len": len(str((encryption_info or {}).get("CertificateThumbprint") or "")),
+                }
+            )
+        (out_dir / f"send_{safe_id}_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.exception("Failed to persist e-adrese send debug manifest")
+
+
+def _decode_base64_text(value: str) -> bytes:
+    text = value.strip()
+    if not text:
+        return b""
+    padding = (-len(text)) % 4
+    if padding:
+        text = f"{text}{'=' * padding}"
+    try:
+        return base64.b64decode(text, validate=True)
+    except Exception:
+        return base64.b64decode(text, validate=False)
+
+
+def _normalize_recipient_code(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _normalize_public_key_entry(value: Mapping[str, Any]) -> dict[str, str] | None:
+    recipient = _normalize_recipient_code(
+        value.get("EAddress")
+        or value.get("Recipient")
+        or value.get("RecipientEAddress")
+    )
+    modulus = str(value.get("Modulus") or "").strip()
+    exponent = str(value.get("Exponent") or "").strip()
+    thumbprint = str(value.get("CertificateThumbprint") or value.get("Thumbprint") or "").strip()
+    if not recipient or not modulus or not exponent or not thumbprint:
+        return None
+    return {
+        "recipient": recipient,
+        "modulus": modulus,
+        "exponent": exponent,
+        "thumbprint": thumbprint,
+    }
+
+
+def _resolve_public_key_map(
+    token_provider: TokenProvider,
+    soap_client: SoapClient,
+    recipients: Sequence[str],
+) -> dict[str, dict[str, str]]:
+    public_keys = get_public_key_list(token_provider, soap_client, list(recipients))
+    result: dict[str, dict[str, str]] = {}
+    for item in public_keys:
+        if not isinstance(item, Mapping):
+            continue
+        normalized = _normalize_public_key_entry(item)
+        if not normalized:
+            continue
+        result[normalized["recipient"]] = normalized
+    return result
+
+
+def _build_recipient_transport_entries_from_public_keys(
+    recipients: Sequence[str],
+    public_key_map: Mapping[str, Mapping[str, str]],
+    *,
+    symmetric_key_bytes: bytes,
+    symmetric_iv_bytes: bytes,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    key_blob = build_div_key_blob(symmetric_key_bytes, symmetric_iv_bytes)
+    entries: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for recipient in recipients:
+        recipient_code = _normalize_recipient_code(recipient)
+        public_key_info = public_key_map.get(recipient_code)
+        if not public_key_info:
+            missing.append(recipient_code)
+            continue
+        public_key = rsa_public_key_from_modexp(
+            public_key_info["modulus"],
+            public_key_info["exponent"],
+        )
+        encrypted_key_b64 = encrypt_key_blob_oaep_sha1(public_key, key_blob)
+        entries.append(
+            {
+                "RecipientE-Address": recipient_code,
+                "EncryptionInfo": {
+                    "Key": encrypted_key_b64,
+                    "CertificateThumbprint": public_key_info["thumbprint"],
+                },
+            }
+        )
+    return entries, missing
+
+
+def _normalize_base64_payload(value: Any, field_name: str | None = None) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _normalize_base64_payload(
+                item_value,
+                str(key) if isinstance(key, str) else None,
+            )
+            for key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_base64_payload(item, field_name) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_base64_payload(item, field_name) for item in value)
+
+    if field_name in _BASE64_BINARY_FIELDS:
+        if value is None or isinstance(value, bytes):
+            return value
+        if isinstance(value, str):
+            return _decode_base64_text(value)
+
+    return value
 
 
 def _call_service_method(
@@ -129,7 +321,7 @@ def _send_message_chunked(
             init_items.append(
                 {
                     "ContentId": item["content_id"],
-                    "Contents": item["contents_b64"],
+                    "Contents": item["contents_bytes"],
                 }
             )
         else:
@@ -245,6 +437,7 @@ def send_message(
     thumb_b64 = recipient_thumbprint_b64
     sym_key = symmetric_key_bytes
     sym_iv = symmetric_iv_bytes
+    recipient_transport_entries: list[dict[str, Any]] | None = None
     if recipient_public_key_modulus_b64 and recipient_public_key_exponent_b64 and thumb_b64:
         public_key = rsa_public_key_from_modexp(
             recipient_public_key_modulus_b64, recipient_public_key_exponent_b64
@@ -263,22 +456,70 @@ def send_message(
             iv_bytes=symmetric_iv_bytes,
             mode=mode,
         )
+    elif document_kind_code == "EINVOICE" and recipients:
+        public_key_map = _resolve_public_key_map(token_provider, soap_client, recipients)
+        if not public_key_map:
+            raise EAddressSoapError(
+                "No recipient public keys returned for EINVOICE recipients: %s"
+                % ", ".join(recipients)
+            )
+        if mode not in ("oaep_cbc", "cbc"):
+            logger.info(
+                "Switching EINVOICE outbound encryption mode from %s to oaep_cbc for recipient public-key flow",
+                mode,
+            )
+            mode = "oaep_cbc"
+        sym_key = sym_key or os.urandom(32)
+        sym_iv = sym_iv or os.urandom(16)
+        recipient_transport_entries, missing_recipients = _build_recipient_transport_entries_from_public_keys(
+            recipients,
+            public_key_map,
+            symmetric_key_bytes=sym_key,
+            symmetric_iv_bytes=sym_iv,
+        )
+        if missing_recipients:
+            raise EAddressSoapError(
+                "Missing recipient public keys for EINVOICE recipients: %s"
+                % ", ".join(missing_recipients)
+            )
 
+    attachments_list = list(attachments)
     envelope, attachments_input, built_message_id = build_envelope(
         sender_address or cfg.default_from,
         recipients,
         document_kind_code,
         subject,
         body_text,
-        list(attachments),
+        attachments_list,
         encryption_key_b64=enc_key_b64,
         recipient_thumbprint_b64=thumb_b64,
+        recipient_entries=recipient_transport_entries,
         trace_text=trace_text,
         notify_sender_on_delivery=notify_sender_on_delivery,
         symmetric_key_bytes=sym_key,
         symmetric_iv_bytes=sym_iv,
         encryption_mode=mode,
     )
+    _write_send_debug_manifest(
+        message_id=built_message_id,
+        sender_address=sender_address or cfg.default_from,
+        recipients=recipients,
+        document_kind_code=document_kind_code,
+        notify_sender_on_delivery=notify_sender_on_delivery,
+        encryption_mode=mode,
+        encryption_key_b64=enc_key_b64,
+        recipient_thumbprint_b64=thumb_b64,
+        symmetric_key_bytes=sym_key,
+        symmetric_iv_bytes=sym_iv,
+        attachments=attachments_list,
+        cfg=cfg,
+        recipient_transport_entries=recipient_transport_entries or [
+            {"RecipientE-Address": recipient}
+            for recipient in recipients
+        ],
+    )
+    envelope = _normalize_base64_payload(envelope)
+    attachments_input = _normalize_base64_payload(attachments_input)
     logger.debug("Built envelope: %s", envelope)
     
     svc = soap_client.service

@@ -13,7 +13,7 @@ class EAddressConfig:
     wsse_signing: bool = False
     wsse_verify: bool = True
     wsse_timestamp: bool = True
-    wsdl_url: str = "https://div.vraa.gov.lv/UnifiedService.svc?wsdl"
+    wsdl_url: str = "https://div.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl"
     token_url: str = "https://div.vraa.gov.lv/Auth/token"
     verify_ssl: bool = True
     timeout: int = 30

@@ -2,6 +2,7 @@ import logging
 import base64
 import datetime as _dt
 from datetime import timezone
+import os
 import uuid
 import hashlib
 import ssl
@@ -31,6 +32,31 @@ except ImportError:  # pragma: no cover - optional dependency
     rsa = None
 
 DIV_NS = "http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0"
+
+
+def _safe_debug_token(value: str | None, fallback: str = "message") -> str:
+    text = (value or "").strip()
+    safe = "".join(ch if ch.isalnum() else "_" for ch in text)
+    return safe or fallback
+
+
+def _persist_debug_soap_request(envelope) -> None:
+    debug_dir = (os.environ.get("EADRESE_DEBUG_DIR") or "").strip()
+    if not debug_dir:
+        return
+    try:
+        soap_env = detect_soap_env(envelope)
+        body = envelope.find(QName(soap_env, "Body")) if soap_env else None
+        op_node = next(iter(body), None) if body is not None else None
+        operation_name = QName(op_node).localname if op_node is not None else "operation"
+        sender_ref = envelope.xpath("string(//*[local-name()='SenderRefNumber'])") or None
+        out_dir = Path(debug_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = _safe_debug_token(f"{operation_name}_{sender_ref}", fallback=operation_name)
+        request_xml = etree.tostring(envelope, encoding="utf-8", xml_declaration=False)
+        (out_dir / f"soap_{safe_name}_request.xml").write_bytes(request_xml)
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to persist e-adrese SOAP request debug XML")
 
 class SenderDocumentSigner(Plugin):
     """Zeep plugin that signs the SenderDocument section (envelope content)."""
@@ -360,6 +386,7 @@ class SignOnlySignature(Signature):
         sender_sig_hash: str = "sha512",
         signature_method=None,
         digest_method=None,
+        endpoint_url: str | None = None,
     ):
         if xmlsec is None:
             raise ImportError("xmlsec is required for WS-Security signatures (install python-xmlsec)")
@@ -403,6 +430,7 @@ class SignOnlySignature(Signature):
                 self._serial_number = str(serial_raw)
         self._add_timestamp = add_timestamp
         self._verify_response = verify_response
+        self._endpoint_url = endpoint_url
         self._sender_doc_signer = SenderDocumentSigner(
             self.key_file,
             self.certfile,
@@ -489,7 +517,10 @@ class SignOnlySignature(Signature):
         to_el = header.find(f".//{{{ns.WSA}}}To")
         if to_el is None:
             to_el = etree.SubElement(header, QName(ns.WSA, "To"))
-        to_el.text = "https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc"
+        to_el.text = (
+            self._endpoint_url
+            or "https://div.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc"
+        )
         ensure_id(to_el)
 
         action_el = header.find(f".//{{{ns.WSA}}}Action")
@@ -612,6 +643,7 @@ class SignOnlySignature(Signature):
             self._sender_doc_si_c14n = getattr(self._sender_doc_signer, "_last_si_c14n", None)
         # Capture final envelope after WSSE + SenderDocument signing for debug
         self._last_envelope = envelope
+        _persist_debug_soap_request(envelope)
         return envelope, headers
 from ..config import EAddressConfig
 
@@ -633,6 +665,9 @@ class SoapClient:
                 session.cert = (str(cfg.client_cert_path), str(cfg.client_key_path))
             wsse = None
             if cfg.wsse_signing and cfg.certificate and cfg.private_key:
+                # Endpoint URL for wsa:To — must match the actual service endpoint
+                _wsdl = cfg.local_wsdl_url or cfg.wsdl_url or ""
+                _endpoint = _wsdl.replace("?wsdl", "").rstrip("/")
                 # Signature expects key file first, certificate second
                 wsse = SignOnlySignature(
                     str(cfg.private_key),
@@ -642,6 +677,7 @@ class SoapClient:
                     trust_store_path=str(cfg.trust_store_path) if cfg.trust_store_path else None,
                     response_cert_path=str(cfg.response_cert_path) if cfg.response_cert_path else None,
                     sender_sig_hash=cfg.sender_sig_hash,
+                    endpoint_url=_endpoint or None,
                 )
             self._wsse = wsse
 

@@ -57,6 +57,34 @@ class DummySession:
 class StubService:
     def __init__(self):
         self.calls = []
+        # Generate a stub RSA key for GetPublicKeyList responses (EINVOICE per-recipient encryption)
+        _stub_priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        _pub_numbers = _stub_priv.public_key().public_numbers()
+        import base64 as _b64
+        _mod_bytes = _pub_numbers.n.to_bytes((_pub_numbers.n.bit_length() + 7) // 8, "big")
+        _exp_bytes = _pub_numbers.e.to_bytes((_pub_numbers.e.bit_length() + 7) // 8, "big")
+        self._stub_modulus_b64 = _b64.b64encode(_mod_bytes).decode()
+        self._stub_exponent_b64 = _b64.b64encode(_exp_bytes).decode()
+        # 20-byte stub SHA-1 thumbprint, base64-encoded
+        self._stub_thumbprint_b64 = _b64.b64encode(b"\xAB" * 20).decode()
+
+    def GetPublicKeyList(self, Token=None, **kwargs):
+        recipients = kwargs.get("Recipients") or {}
+        addrs = recipients.get("string") if isinstance(recipients, dict) else []
+        if isinstance(addrs, str):
+            addrs = [addrs]
+        self.calls.append({"method": "GetPublicKeyList", "token": Token, "recipients": addrs})
+        return {
+            "RecipientPublicKey": [
+                {
+                    "EAddress": addr,
+                    "Modulus": self._stub_modulus_b64,
+                    "Exponent": self._stub_exponent_b64,
+                    "CertificateThumbprint": self._stub_thumbprint_b64,
+                }
+                for addr in (addrs or [])
+            ]
+        }
 
     def SendMessage(self, Token, Envelope):
         self.calls.append({"method": "SendMessage", "token": Token, "envelope": Envelope})
@@ -128,11 +156,12 @@ def test_eadrese_send_message_uses_stub_service():
     client = EAddressClient(cfg, session=session, service=svc)
 
     attachment = Attachment(filename="sample.xml", content=b"<x/>", content_type="application/xml")
-    msg_id = client.send_message("0101", attachments=[attachment])
+    msg_id = client.send_message("0101", document_kind_code="DOC_EMPTY", attachments=[attachment])
 
     assert msg_id == "stubbed-id"
-    assert svc.calls[0]["token"] == "token123"
-    envelope = svc.calls[0]["envelope"]
+    send_call = next(c for c in svc.calls if c.get("method") == "SendMessage")
+    assert send_call["token"] == "token123"
+    envelope = send_call["envelope"]
     assert envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"][0]["RecipientE-Address"] == "0101"
     payload_files = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"]
     assert payload_files[0]["Name"] == "sample.xml"
@@ -187,7 +216,9 @@ def test_eadrese_vid_auto_logic():
     # Should automatically append VID address as secondary recipient
     client.send_message("010101-11111", document_kind_code="EINVOICE", attachments=[attachment])
 
-    envelope = svc.calls[0]["envelope"]
+    # GetPublicKeyList is called first, then SendMessage
+    send_call = next(c for c in svc.calls if c.get("method") == "SendMessage")
+    envelope = send_call["envelope"]
     # Check recipients structure
     recipient_structs = envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"]
 
