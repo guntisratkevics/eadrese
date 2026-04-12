@@ -159,12 +159,13 @@ def test_confirm_combined_signature_produces_verifiable_signature(tmp_path):
     assert signature is not None
 
     refs = signature.findall(f".//{{{DS_NS}}}Reference")
-    # Verify section digests (inclusive C14N).
+    # Verify section digests (exclusive C14N — matches Java/official DIV client behaviour).
+    # DigestValue text may be line-wrapped at 76 chars for Java/Metro interop; strip before comparing.
     for section_id in ("SenderSection", "ServerSection", "ConfirmEntry1"):
         ref = next(r for r in refs if r.get("URI") == f"#{section_id}")
         target = _find_by_id(combined, section_id)
-        c14n = etree.tostring(target, method="c14n", exclusive=False, with_comments=False)
-        dv = ref.findtext(f".//{{{DS_NS}}}DigestValue")
+        c14n = etree.tostring(target, method="c14n", exclusive=True, with_comments=False)
+        dv = (ref.findtext(f".//{{{DS_NS}}}DigestValue") or "").replace("\n", "").strip()
         assert dv == _b64_sha512(c14n)
 
     # Verify SignedProperties digest.
@@ -178,7 +179,7 @@ def test_confirm_combined_signature_produces_verifiable_signature(tmp_path):
         with_comments=False,
         inclusive_ns_prefixes=["ds"],
     )
-    props_dv = props_ref.findtext(f".//{{{DS_NS}}}DigestValue")
+    props_dv = (props_ref.findtext(f".//{{{DS_NS}}}DigestValue") or "").replace("\n", "").strip()
     assert props_dv == _b64_sha512(props_c14n)
 
     # Verify RSA signature over SignedInfo.

@@ -99,7 +99,7 @@ def test_get_next_message_decrypts_attachments_and_confirms(tmp_path, monkeypatc
 
     confirm_calls = []
 
-    def _confirm(tp, sc, msg_id):
+    def _confirm(tp, sc, msg_id, **kwargs):
         confirm_calls.append(msg_id)
 
     monkeypatch.setattr(receive, "confirm_message", _confirm)
@@ -192,7 +192,7 @@ def test_get_next_message_decrypts_div_aes_cbc(tmp_path, monkeypatch):
 
     confirm_calls = []
 
-    def _confirm(tp, sc, msg_id):
+    def _confirm(tp, sc, msg_id, **kwargs):
         confirm_calls.append(msg_id)
 
     monkeypatch.setattr(receive, "confirm_message", _confirm)
