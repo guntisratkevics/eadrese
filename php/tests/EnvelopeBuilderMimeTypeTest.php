@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 final class EnvelopeBuilderMimeTypeTest extends TestCase
 {
-    public function test_encrypted_text_mime_is_normalized(): void
+    public function test_encrypted_attachment_keeps_logical_file_metadata(): void
     {
         $attachment = new Attachment('a.txt', 'ABC', 'text/plain');
 
@@ -23,7 +23,12 @@ final class EnvelopeBuilderMimeTypeTest extends TestCase
         );
 
         $file = $envelope['SenderDocument']['DocumentMetadata']['PayloadReference']['File'][0];
-        $this->assertSame('application/octet-stream', $file['MimeType']);
+        $this->assertSame('text/plain', $file['MimeType']);
+        $this->assertSame(3, $file['Size']);
+        $this->assertSame(
+            base64_encode(hash('sha512', 'ABC', true)),
+            $file['Content']['DigestValue']
+        );
     }
 
     public function test_plain_text_mime_is_kept_when_not_encrypted(): void

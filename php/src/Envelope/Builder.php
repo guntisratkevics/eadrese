@@ -9,14 +9,11 @@ use LatvianEinvoice\Utils\Crypto;
 
 final class Builder
 {
-    private static function normalizeMimeType(?string $contentType, bool $encrypted): string
+    private static function normalizeMimeType(?string $contentType): string
     {
         $mime = trim((string)($contentType ?? ''));
         if ($mime === '') {
             $mime = 'application/octet-stream';
-        }
-        if ($encrypted && stripos($mime, 'text/') === 0) {
-            return 'application/octet-stream';
         }
         return $mime;
     }
@@ -57,7 +54,8 @@ final class Builder
         foreach ($attachments as $idx => $att) {
             // 0-based ContentId/ContentReference — matches Python client and official Java client.
             $contentId = (string)$idx;
-            $payloadBytes = $att->content;
+            $logicalPayloadBytes = $att->content;
+            $payloadBytes = $logicalPayloadBytes;
 
             if ($symmetricKeyBytes !== null) {
                 if ($useCbc) {
@@ -82,10 +80,10 @@ final class Builder
                 ];
             }
 
-            $digestB64 = base64_encode(hash('sha512', $payloadBytes, true));
+            $digestB64 = base64_encode(hash('sha512', $logicalPayloadBytes, true));
             $files[] = [
-                'MimeType' => self::normalizeMimeType($att->contentType, $symmetricKeyBytes !== null),
-                'Size' => strlen($payloadBytes),
+                'MimeType' => self::normalizeMimeType($att->contentType),
+                'Size' => strlen($logicalPayloadBytes),
                 'Name' => $att->filename,
                 'Content' => [
                     'ContentReference' => $contentId,
