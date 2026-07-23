@@ -9,7 +9,7 @@ No Composer dependencies required for production use; a PSR-4 autoloader is bund
 | Operation | Method | Status |
 |-----------|--------|--------|
 | `CertValidate` | `certValidateSoap()` | ✅ Validated |
-| `SendMessage` | `sendMessageSoap()` | ✅ Validated |
+| `SendMessage` | `sendMessage()` / `sendTextMessageSoap()` | ✅ Validated |
 | `GetMessageList` | `getMessageListSoap()` | ✅ Validated |
 | `GetMessage` | `getMessageSoap()` | ✅ Validated |
 | `GetMessage + structured summary` | `getMessageAndFileInfoSoap()` | ✅ Local helper |
@@ -24,13 +24,16 @@ No Composer dependencies required for production use; a PSR-4 autoloader is bund
 | `GetMessageServerConfirmation` | `getMessageServerConfirmationSoap()` | ✅ Validated |
 | `ValidateEAddress` | `validateEAddressSoap()` | ⚠️ Government accounts only |
 | `GetAddresseeUnit` | `getAddresseeUnitSoap()` | ⚠️ Government accounts only |
+| Reply document reference | `sendMessage(..., referenceId: ...)` | ✅ Unit tested |
 
 > **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
 > Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `SearchAddresseeUnit` instead.
 
-## Validation status (2026-04-12, divtest.vraa.gov.lv)
+## Validation status
 
-Core operations have been exercised against the VRAA TEST endpoint from the Docker runner:
+Core operations have previously been exercised against the VRAA TEST endpoint
+from the Docker runner. These historical checks do not replace a current test
+run:
 
 - `CertValidate` → `{"status":"ok"}`
 - `SendMessage` (DOC_EMPTY) → HTTP 200, `MessageId` returned
@@ -41,7 +44,8 @@ Core operations have been exercised against the VRAA TEST endpoint from the Dock
 - `GetNotificationList` / `poll_notifications` → HTTP 200, notifications returned and confirmed
 - `SendMessage` + immediate `GetMessageServerConfirmation` request reaches TEST correctly, but VRAA may still return `Ziņojuma apstrādes apstiprinājums nav pieejams.` until the confirmation is generated
 
-No private certificates, keys, or local environment files are tracked in Git. The examples below use placeholders only.
+No private certificates, keys, message payloads, or local environment files are
+tracked in Git. The examples below use placeholders only.
 
 ## Known VRAA limitations
 
@@ -83,7 +87,7 @@ cp .env.test.example .env.test
 ./test.sh poll_notifications
 ./test.sh get_public_key_list
 ./test.sh get_addressee_list          # full initial sync
-DIV_LAST_VERSION=10405155 ./test.sh get_addressee_list  # delta sync
+DIV_LAST_VERSION=123456 ./test.sh get_addressee_list  # replace with your saved checkpoint
 ./test.sh get_server_confirm          # requires DIV_MSG_ID=<id>
 ./test.sh validate_eaddress           # requires government account
 ./test.sh lint
@@ -157,13 +161,25 @@ $config = new Config(
 );
 
 $client = new Client($config);
-$result = $client->sendMessageSoap(
+$result = $client->sendMessage(
     recipients:       ['_PRIVATE@<RECIPIENT>'],
     documentKindCode: 'DOC_EMPTY',
     subject:          'Test',
     bodyText:         'Hello from PHP SDK',
 );
 echo $result['message_id'];
+```
+
+### Reply to an existing message
+
+```php
+$result = $client->sendMessage(
+    recipients: ['_PRIVATE@<RECIPIENT>'],
+    documentKindCode: 'DOC_EMPTY',
+    subject: 'Re: Previous message',
+    bodyText: 'Reply body',
+    referenceId: '<ORIGINAL_MESSAGE_ID>',
+);
 ```
 
 ### Receive and confirm
@@ -185,7 +201,7 @@ $result = $client->getInitialAddresseeRecordListSoap(allPages: true);
 // $result['continuation_token'] — non-null if more pages remain
 
 // Incremental delta sync from a known version
-$result = $client->getChangedAddresseeRecordListSoap(lastVersion: 10405155);
+$result = $client->getChangedAddresseeRecordListSoap(lastVersion: 123456); // Replace with your saved checkpoint.
 // $result['records'] — only records changed since that version
 ```
 
@@ -237,6 +253,9 @@ test.sh                       — Docker-based test runner
 
 - No Composer required. The bundled PSR-4 autoloader resolves `LatvianEinvoice\*` from `src/`.
 - Private keys, certificates, and `.env.test` are excluded from version control via `.gitignore`.
+- Keep organization-specific e-addresses, registration numbers, message IDs,
+  and payload samples out of source, tests, README files, and committed debug
+  artifacts.
 - VRAA PROD endpoint (`div.vraa.gov.lv`) must not be used for testing — VRAA explicitly prohibits it.
   Use `divtest.vraa.gov.lv` with the TEST certificate for all integration work.
 - To send messages in production, VRAA must activate a `_DEFAULT@<regno>` sender address for each company.

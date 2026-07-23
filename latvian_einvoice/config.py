@@ -54,3 +54,8 @@ class EAddressConfig:
 
     # Outbound payload encryption mode: "gcm" (default) or "oaep_cbc"
     outbound_encryption: str = "gcm"
+
+    # Optional password for the encrypted signing/decryption PEM in private_key.
+    # Appended for positional compatibility. requests does not support encrypted
+    # client_key_path files for mTLS.
+    key_password: Optional[str] = None

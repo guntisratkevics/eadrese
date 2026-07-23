@@ -37,7 +37,8 @@ final class Client
         ?string $traceText = 'Created',
         bool $notifySenderOnDelivery = false,
         ?string $encryptionMode = null,
-        ?array $recipientEntries = null
+        ?array $recipientEntries = null,
+        ?string $referenceId = null
     ): array {
         $normalizedRecipients = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
 
@@ -55,7 +56,8 @@ final class Client
             $encryptionMode ?? $this->config->encryptionMode,
             $traceText,
             $notifySenderOnDelivery,
-            $recipientEntries
+            $recipientEntries,
+            $referenceId
         );
     }
 
@@ -93,7 +95,8 @@ final class Client
         array $recipients,
         string $subject,
         string $bodyText = '',
-        string $documentKindCode = 'DOC_EMPTY'
+        string $documentKindCode = 'DOC_EMPTY',
+        ?string $referenceId = null
     ): array {
         $normalizedRecipients = $this->normalizeRecipientsForSend($recipients, $documentKindCode);
         $soap = new DirectSoapClient($this->config);
@@ -101,7 +104,8 @@ final class Client
             $normalizedRecipients,
             $subject,
             $bodyText,
-            $documentKindCode
+            $documentKindCode,
+            referenceId: $referenceId
         );
     }
 
@@ -420,7 +424,8 @@ final class Client
         ?string $recipientCertPath = null,
         ?string $recipientCertPem = null,
         ?string $recipientPublicKeyModulusB64 = null,
-        ?string $recipientPublicKeyExponentB64 = null
+        ?string $recipientPublicKeyExponentB64 = null,
+        ?string $referenceId = null
     ): array {
         $mode = strtolower(trim((string)($encryptionMode ?? $this->config->encryptionMode ?: 'gcm')));
         $encryptionKey = $encryptionKeyB64;
@@ -501,7 +506,8 @@ final class Client
             $traceText,
             $notifySenderOnDelivery,
             $mode,
-            $perRecipientEntries
+            $perRecipientEntries,
+            $referenceId
         );
 
         $soap = new DirectSoapClient($this->config);

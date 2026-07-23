@@ -40,7 +40,8 @@ final class Builder
         string $encryptionMode = 'gcm',
         ?string $traceText = 'Created',
         bool $notifySenderOnDelivery = false,
-        ?array $recipientEntries = null
+        ?array $recipientEntries = null,
+        ?string $referenceId = null
     ): array {
         $now = new \DateTimeImmutable('now', new \DateTimeZone('Europe/Riga'));
         $messageId = bin2hex(random_bytes(16));
@@ -114,6 +115,16 @@ final class Builder
         ];
         if (!empty($files)) {
             $documentMetadata['PayloadReference'] = ['File' => $files];
+        }
+        $referenceText = trim((string)($referenceId ?? ''));
+        if ($referenceText !== '') {
+            $documentMetadata['CommonMetadata'] = [
+                'DocumentReferences' => [
+                    'ReferenceEntry' => [[
+                        'RefRegistrationNumber' => $referenceText,
+                    ]],
+                ],
+            ];
         }
 
         // Use per-recipient entries when provided (EINVOICE auto-fetch flow); fall back to

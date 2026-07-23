@@ -360,7 +360,11 @@ def _sign_combined_envelope(
                 sig_el.text = base64.b64encode(sig_bytes).decode("ascii")
     else:
         ctx = xmlsec.SignatureContext()
-        key = xmlsec.Key.from_file(str(signer.key_file), xmlsec.KeyFormat.PEM)
+        key = xmlsec.Key.from_file(
+            str(signer.key_file),
+            xmlsec.KeyFormat.PEM,
+            getattr(signer, "_key_password", None),
+        )
         key.load_cert_from_file(str(signer.cert_file), xmlsec.KeyFormat.PEM)
         ctx.key = key
         for section_id in signed_section_ids:
@@ -503,7 +507,11 @@ def _legacy_sign_confirmation_part(
     obj.append(qp)
 
     ctx = xmlsec.SignatureContext()
-    key = xmlsec.Key.from_file(str(signer.key_file), xmlsec.KeyFormat.PEM)
+    key = xmlsec.Key.from_file(
+        str(signer.key_file),
+        xmlsec.KeyFormat.PEM,
+        getattr(signer, "_key_password", None),
+    )
     key.load_cert_from_file(str(signer.cert_file), xmlsec.KeyFormat.PEM)
     ctx.key = key
     ctx.register_id(sign_entry, "Id")

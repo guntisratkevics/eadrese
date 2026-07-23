@@ -2,8 +2,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+build/
 .pytest_cache/
 .env
+.env.*
+!.env.example
+!*.env.example
+!*.env.*.example
 .venv
 .DS_Store
 
@@ -19,5 +24,12 @@ php/tests/manual_pss045_*.php
 # Cert artifacts (never commit real certificates)
 prod-certs/
 *.p12
+*.pfx
+*.pkcs12
 *.key
 *.pem
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore

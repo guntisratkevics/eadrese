@@ -2,6 +2,7 @@ import pytest
 
 pytest.importorskip("xmlsec")
 
+import base64
 import datetime as dt
 from datetime import timezone
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,6 +18,7 @@ from latvian_einvoice import (
     EAddressAuthError,
     EAddressSoapError,
 )
+from latvian_einvoice.api import send as send_api
 
 
 class DummyResponse:
@@ -57,32 +59,31 @@ class DummySession:
 class StubService:
     def __init__(self):
         self.calls = []
-        # Generate a stub RSA key for GetPublicKeyList responses (EINVOICE per-recipient encryption)
-        _stub_priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        _pub_numbers = _stub_priv.public_key().public_numbers()
-        import base64 as _b64
-        _mod_bytes = _pub_numbers.n.to_bytes((_pub_numbers.n.bit_length() + 7) // 8, "big")
-        _exp_bytes = _pub_numbers.e.to_bytes((_pub_numbers.e.bit_length() + 7) // 8, "big")
-        self._stub_modulus_b64 = _b64.b64encode(_mod_bytes).decode()
-        self._stub_exponent_b64 = _b64.b64encode(_exp_bytes).decode()
-        # 20-byte stub SHA-1 thumbprint, base64-encoded
-        self._stub_thumbprint_b64 = _b64.b64encode(b"\xAB" * 20).decode()
+        stub_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_numbers = stub_private_key.public_key().public_numbers()
+        self._stub_modulus_b64 = base64.b64encode(
+            public_numbers.n.to_bytes((public_numbers.n.bit_length() + 7) // 8, "big")
+        ).decode()
+        self._stub_exponent_b64 = base64.b64encode(
+            public_numbers.e.to_bytes((public_numbers.e.bit_length() + 7) // 8, "big")
+        ).decode()
+        self._stub_thumbprint_b64 = base64.b64encode(b"\xAB" * 20).decode()
 
     def GetPublicKeyList(self, Token=None, **kwargs):
         recipients = kwargs.get("Recipients") or {}
-        addrs = recipients.get("string") if isinstance(recipients, dict) else []
-        if isinstance(addrs, str):
-            addrs = [addrs]
-        self.calls.append({"method": "GetPublicKeyList", "token": Token, "recipients": addrs})
+        addresses = recipients.get("string") if isinstance(recipients, dict) else []
+        if isinstance(addresses, str):
+            addresses = [addresses]
+        self.calls.append({"method": "GetPublicKeyList", "token": Token, "recipients": addresses})
         return {
             "RecipientPublicKey": [
                 {
-                    "EAddress": addr,
+                    "EAddress": address,
                     "Modulus": self._stub_modulus_b64,
                     "Exponent": self._stub_exponent_b64,
                     "CertificateThumbprint": self._stub_thumbprint_b64,
                 }
-                for addr in (addrs or [])
+                for address in addresses
             ]
         }
 
@@ -117,6 +118,104 @@ class StubService:
         return {"AddresseeUnits": {"AddresseeUnit": [{"Owner": {"Code": code}, "EAddress": "TEST_EADDR"}]}}
 
 
+class SearchTypeErrorFallbackService:
+    def __init__(self):
+        self.calls = []
+
+    def SearchAddresseeUnit(self, Token=None, AddresseeOwnerCode=None, AddresseeUnitOwner=None, **_kwargs):
+        payload = {}
+        if AddresseeOwnerCode is not None:
+            payload["AddresseeOwnerCode"] = AddresseeOwnerCode
+        if AddresseeUnitOwner is not None:
+            payload["AddresseeUnitOwner"] = AddresseeUnitOwner
+        self.calls.append({"token": Token, "payload": payload})
+
+        if AddresseeOwnerCode:
+            raise TypeError("unexpected payload shape")
+
+        if isinstance(AddresseeUnitOwner, dict):
+            code = AddresseeUnitOwner.get("Code")
+            return {"AddresseeUnits": {"AddresseeUnit": [{"Owner": {"Code": code}, "EAddress": "TEST_EADDR"}]}}
+
+        raise TypeError("missing supported payload")
+
+
+class SearchBusinessFaultService:
+    def __init__(self):
+        self.calls = []
+
+    def SearchAddresseeUnit(self, Token=None, AddresseeOwnerCode=None, AddresseeUnitOwner=None, **_kwargs):
+        payload = {}
+        if AddresseeOwnerCode is not None:
+            payload["AddresseeOwnerCode"] = AddresseeOwnerCode
+        if AddresseeUnitOwner is not None:
+            payload["AddresseeUnitOwner"] = AddresseeUnitOwner
+        self.calls.append({"token": Token, "payload": payload})
+
+        if AddresseeOwnerCode:
+            raise RuntimeError("Nav atļauts pārvaldīt norādīto adresātu.")
+
+        return {"AddresseeUnits": {"AddresseeUnit": [{"Owner": {"Code": "fallback"}, "EAddress": "TEST_EADDR"}]}}
+
+
+class ChunkedSendStubService:
+    def __init__(self):
+        self.calls = []
+
+    def SendMessage(self, *args, **kwargs):
+        raise AssertionError("SendMessage should not be used for large attachment flow")
+
+    def InitSendMessage(
+        self,
+        Token=None,
+        MessageClientId=None,
+        SenderEAddress=None,
+        AttachmentsInput=None,
+        **_kwargs,
+    ):
+        self.calls.append(
+            {
+                "method": "InitSendMessage",
+                "Token": Token,
+                "MessageClientId": MessageClientId,
+                "SenderEAddress": SenderEAddress,
+                "AttachmentsInput": AttachmentsInput,
+            }
+        )
+        return {"MessageId": "chunked-server-id"}
+
+    def SendAttachmentSection(
+        self,
+        Token=None,
+        MessageId=None,
+        ContentId=None,
+        SectionIndex=None,
+        Contents=None,
+        **_kwargs,
+    ):
+        self.calls.append(
+            {
+                "method": "SendAttachmentSection",
+                "Token": Token,
+                "MessageId": MessageId,
+                "ContentId": ContentId,
+                "SectionIndex": SectionIndex,
+                "Contents": Contents,
+            }
+        )
+        return {}
+
+    def CompleteSendMessage(self, Token=None, MessageId=None, Envelope=None, **_kwargs):
+        self.calls.append(
+            {
+                "method": "CompleteSendMessage",
+                "Token": Token,
+                "MessageId": MessageId,
+                "Envelope": Envelope,
+            }
+        )
+        return {}
+
 def _self_signed(tmpdir):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name(
@@ -148,7 +247,6 @@ def _self_signed(tmpdir):
     cf.write_bytes(cert_pem)
     return kf, cf
 
-
 def test_eadrese_send_message_uses_stub_service():
     session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
     svc = StubService()
@@ -159,12 +257,139 @@ def test_eadrese_send_message_uses_stub_service():
     msg_id = client.send_message("0101", document_kind_code="DOC_EMPTY", attachments=[attachment])
 
     assert msg_id == "stubbed-id"
-    send_call = next(c for c in svc.calls if c.get("method") == "SendMessage")
+    send_call = next(call for call in svc.calls if call["method"] == "SendMessage")
     assert send_call["token"] == "token123"
     envelope = send_call["envelope"]
     assert envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"][0]["RecipientE-Address"] == "0101"
     payload_files = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"]
     assert payload_files[0]["Name"] == "sample.xml"
+
+
+def test_eadrese_large_attachment_uses_chunked_send_flow():
+    session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
+    svc = ChunkedSendStubService()
+    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    client = EAddressClient(cfg, session=session, service=svc)
+
+    large_content = b"A" * (4 * 1024 * 1024 + 1024)
+    attachment = Attachment(
+        filename="large.bin",
+        content=large_content,
+        content_type="application/octet-stream",
+    )
+
+    msg_id = client.send_message(
+        "0101",
+        document_kind_code="DOC_EMPTY",
+        subject="Large attachment test",
+        body_text="Chunked send test",
+        attachments=[attachment],
+    )
+
+    assert msg_id == "chunked-server-id"
+    methods = [call["method"] for call in svc.calls]
+    assert methods[0] == "InitSendMessage"
+    assert methods[-1] == "CompleteSendMessage"
+
+    init_items = svc.calls[0]["AttachmentsInput"]["AttachmentInput"]
+    assert init_items[0]["ContentId"] == "0"
+    assert "Contents" not in init_items[0]
+
+    section_calls = [call for call in svc.calls if call["method"] == "SendAttachmentSection"]
+    assert len(section_calls) == 2
+    assert section_calls[0]["SectionIndex"] == 0
+    assert section_calls[1]["SectionIndex"] == 1
+    assert isinstance(section_calls[0]["Contents"], bytes)
+    assert isinstance(section_calls[1]["Contents"], bytes)
+
+
+def test_eadrese_large_attachment_exact_multiple_sends_terminal_section():
+    session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
+    svc = ChunkedSendStubService()
+    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    client = EAddressClient(cfg, session=session, service=svc)
+
+    exact_multiple = b"B" * (8 * 1024 * 1024)
+    attachment = Attachment(
+        filename="exact.bin",
+        content=exact_multiple,
+        content_type="application/octet-stream",
+    )
+
+    msg_id = client.send_message(
+        "0101",
+        document_kind_code="DOC_EMPTY",
+        subject="Large attachment exact test",
+        body_text="Chunked send terminal section test",
+        attachments=[attachment],
+    )
+
+    assert msg_id == "chunked-server-id"
+    section_calls = [call for call in svc.calls if call["method"] == "SendAttachmentSection"]
+    assert len(section_calls) == 3
+    assert section_calls[0]["SectionIndex"] == 0
+    assert section_calls[1]["SectionIndex"] == 1
+    assert section_calls[2]["SectionIndex"] == 2
+    assert isinstance(section_calls[0]["Contents"], bytes)
+    assert isinstance(section_calls[1]["Contents"], bytes)
+    assert section_calls[2]["Contents"] is None
+
+
+def test_eadrese_chunked_send_inline_contents_are_bytes():
+    session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
+    svc = ChunkedSendStubService()
+    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    client = EAddressClient(cfg, session=session, service=svc)
+
+    larger = Attachment(
+        filename="large.bin",
+        content=b"L" * (3 * 1024 * 1024),
+        content_type="application/octet-stream",
+    )
+    smaller = Attachment(
+        filename="small.bin",
+        content=b"S" * (2 * 1024 * 1024),
+        content_type="application/octet-stream",
+    )
+
+    msg_id = client.send_message(
+        "0101",
+        document_kind_code="DOC_EMPTY",
+        subject="Chunked mixed send",
+        body_text="Chunked mixed send test",
+        attachments=[larger, smaller],
+    )
+
+    assert msg_id == "chunked-server-id"
+    init_items = svc.calls[0]["AttachmentsInput"]["AttachmentInput"]
+    assert "Contents" not in init_items[0]
+    assert isinstance(init_items[1]["Contents"], bytes)
+
+
+def test_base64_payload_fields_are_normalized_to_bytes():
+    payload = {
+        "DigestValue": "AQID",
+        "Description": "keep-as-string",
+        "Recipients": {
+            "RecipientEntry": [
+                {
+                    "EncryptionInfo": {
+                        "Key": "AQIDBA==",
+                        "CertificateThumbprint": "AQI=",
+                    }
+                }
+            ]
+        },
+        "AttachmentInput": [{"ContentId": "0", "Contents": "QQ=="}],
+    }
+
+    normalized = send_api._normalize_base64_payload(payload)
+
+    assert normalized["DigestValue"] == b"\x01\x02\x03"
+    assert normalized["Description"] == "keep-as-string"
+    assert normalized["Recipients"]["RecipientEntry"][0]["EncryptionInfo"]["Key"] == b"\x01\x02\x03\x04"
+    assert normalized["Recipients"]["RecipientEntry"][0]["EncryptionInfo"]["CertificateThumbprint"] == b"\x01\x02"
+    assert normalized["AttachmentInput"][0]["Contents"] == b"A"
 
 
 def test_eadrese_receive_confirm_search(tmp_path):
@@ -203,6 +428,40 @@ def test_eadrese_receive_confirm_search(tmp_path):
     assert svc.calls[2]["code"] == "4000123123"
 
 
+def test_search_addressee_falls_back_on_type_error():
+    session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
+    svc = SearchTypeErrorFallbackService()
+    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    client = EAddressClient(cfg, session=session, service=svc)
+
+    results = client.search_addressee("4000123123")
+
+    assert len(results) == 1
+    assert results[0]["Owner"]["Code"] == "4000123123"
+    assert any(call["payload"].get("AddresseeOwnerCode") == "4000123123" for call in svc.calls)
+    assert any(
+        isinstance(call["payload"].get("AddresseeUnitOwner"), dict)
+        and call["payload"]["AddresseeUnitOwner"].get("Code") == "4000123123"
+        for call in svc.calls
+    )
+
+
+def test_search_addressee_does_not_mask_business_fault():
+    session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
+    svc = SearchBusinessFaultService()
+    cfg = EAddressConfig(client_id="cid", client_secret="secret", verify_ssl=False)
+    client = EAddressClient(cfg, session=session, service=svc)
+
+    with pytest.raises(EAddressSoapError) as exc_info:
+        client.search_addressee("4000123123")
+
+    assert "Nav atļauts pārvaldīt norādīto adresātu." in str(exc_info.value)
+
+    assert len(svc.calls) == 1
+    assert svc.calls[0]["payload"].get("AddresseeOwnerCode") == "4000123123"
+    assert "AddresseeUnitOwner" not in svc.calls[0]["payload"]
+
+
 def test_eadrese_vid_auto_logic():
     session = DummySession([({"access_token": "token123", "expires_in": 120}, 200)])
     svc = StubService()
@@ -216,8 +475,7 @@ def test_eadrese_vid_auto_logic():
     # Should automatically append VID address as secondary recipient
     client.send_message("010101-11111", document_kind_code="EINVOICE", attachments=[attachment])
 
-    # GetPublicKeyList is called first, then SendMessage
-    send_call = next(c for c in svc.calls if c.get("method") == "SendMessage")
+    send_call = next(call for call in svc.calls if call["method"] == "SendMessage")
     envelope = send_call["envelope"]
     # Check recipients structure
     recipient_structs = envelope["SenderDocument"]["SenderTransportMetadata"]["Recipients"]["RecipientEntry"]

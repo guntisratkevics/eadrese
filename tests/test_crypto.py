@@ -57,9 +57,7 @@ def test_encrypt_payload_roundtrip():
 
 def test_derive_encryption_fields_and_decrypt():
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(
-        recipient_cert_pem=cert_pem, key_bytes=b"1" * 32
-    )
+    enc_key_b64, thumb_b64, sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem, key_bytes=b"1" * 32)
     # Encrypted key can be decrypted with private key
     decrypted = decrypt_key_with_private(key_pem, enc_key_b64)
     assert decrypted == b"1" * 32
@@ -72,9 +70,7 @@ def test_derive_encryption_fields_and_decrypt():
 
 def test_decrypt_key_accepts_raw_bytes_input():
     cert_pem, key_pem = _self_signed_cert()
-    enc_key_b64, _thumb_b64, _sym_key, _iv = derive_encryption_fields(
-        recipient_cert_pem=cert_pem, key_bytes=b"1" * 32
-    )
+    enc_key_b64, _thumb_b64, _sym_key, _iv = derive_encryption_fields(recipient_cert_pem=cert_pem, key_bytes=b"1" * 32)
     enc_key_raw = base64.b64decode(enc_key_b64)
     decrypted = decrypt_key_with_private(key_pem, enc_key_raw)
     assert decrypted == b"1" * 32
@@ -133,12 +129,12 @@ def test_build_envelope_with_encryption_populates_ciphertext():
     assert attachments_input is not None
     ai = attachments_input["AttachmentInput"][0]
     assert "IV" in ai and "CipherText" in ai
-    # DigestValue in File should match sha512 of ciphertext
+    # Java parity: File metadata describes the logical payload, not the encrypted transport bytes.
     file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"][0]
-    assert file_entry["MimeType"] == "application/octet-stream"
+    assert file_entry["MimeType"] == "text/plain"
+    assert file_entry["Size"] == 3
     digest_b64 = file_entry["Content"]["DigestValue"]
-    ct = base64.b64decode(ai["CipherText"])
-    assert digest_b64 == base64.b64encode(hashlib.sha512(ct).digest()).decode("ascii")
+    assert digest_b64 == base64.b64encode(hashlib.sha512(b"ABC").digest()).decode("ascii")
 
 
 def test_build_envelope_keeps_text_plain_when_not_encrypted():
@@ -155,3 +151,21 @@ def test_build_envelope_keeps_text_plain_when_not_encrypted():
     assert attachments_input is not None
     file_entry = envelope["SenderDocument"]["DocumentMetadata"]["PayloadReference"]["File"][0]
     assert file_entry["MimeType"] == "text/plain"
+
+
+def test_build_envelope_populates_document_reference_for_reply():
+    envelope, _attachments_input, _ = build_envelope(
+        sender_e_address="_DEFAULT@90000000000",
+        recipients_list=["_DEFAULT@40003000000"],
+        document_kind_code="DOC_EMPTY",
+        subject="Re: Test",
+        body_text="Reply body",
+        attachments=[],
+        reference_id="ORIGINAL-MSG-ID-001",
+    )
+
+    reference_entries = (
+        envelope["SenderDocument"]["DocumentMetadata"]["CommonMetadata"]
+        ["DocumentReferences"]["ReferenceEntry"]
+    )
+    assert reference_entries == [{"RefRegistrationNumber": "ORIGINAL-MSG-ID-001"}]

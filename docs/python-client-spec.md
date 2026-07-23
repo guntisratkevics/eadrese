@@ -2,8 +2,9 @@
 
 ## 1. Overview
 `latvian_einvoice` is a pure Python implementation of Latvia's E-Address (VRAA VUS / DIV) and VID EDS e-invoice flow.
-It mirrors the behavior of the official Java/.NET clients where possible, but it is experimental and partially
-reverse-engineered.
+It mirrors the behavior of the official Java/.NET clients where possible, but
+it is experimental and based on published schemas, WSDL documents, and
+interoperability testing.
 
 ## 2. Endpoints
 Typical endpoints (adjust for TEST/PROD):
@@ -24,6 +25,8 @@ Typical endpoints (adjust for TEST/PROD):
   - recipients (personal code or e-address)
   - optional attachments (with optional AES-GCM encryption)
   - optional EncryptionInfo for recipients
+  - optional `reference_id` for replies, emitted as
+    `CommonMetadata.DocumentReferences.ReferenceEntry.RefRegistrationNumber`
 - VID auto add: when `vid_subaddress_auto=True` and DocumentKindCode is EINVOICE, the library adds
   VID subaddress automatically (TEST or PROD).
 - VRAA note: EINVOICE messages must include VID subaddress (mandatory).
@@ -40,13 +43,19 @@ Typical endpoints (adjust for TEST/PROD):
   - Timestamp + To are signed
   - BinarySecurityToken + SecurityTokenReference
 
-## 6. Receiving and confirmation
-- GetNextMessage retrieves messages (with optional attachments).
-- ConfirmMessage acknowledges the message and removes it from the queue.
+## 6. Receiving, confirmation, and directory operations
+- `GetNextMessage`, `GetMessageList`, and `GetMessage` retrieve messages.
+- MTOM/XOP response parts and separate attachment sections are normalized.
+- `ConfirmMessage` supports accepted/rejected status metadata.
 - Optional decryption for attachments when EncryptionInfo and private key are provided.
 - DIV inbound encryption (per Java/.NET clients):
   - RSA-OAEP (SHA1) decrypt of `EncryptionInfo.Key` yields `[key_len][aes_key][iv]`.
-  - AES-CBC/PKCS5 for content bytes; optional GZIP decompression when `File.Compressed=true`.
+  - AES-CBC/PKCS5 for content bytes; guarded GZIP decompression preserves
+    explicitly supplied `.gz`/`application-gzip` payloads.
+- Notification list/confirm/poll and message server-confirmation operations are
+  exposed by `EAddressClient`.
+- Initial and changed addressee-directory synchronization supports paging and
+  checkpoint versions.
 
 ## 7. Configuration
 Key parameters in `EAddressConfig`:
@@ -56,3 +65,12 @@ Key parameters in `EAddressConfig`:
 - wsse_signing, wsse_verify, wsse_timestamp
 - vid_subaddress_auto, vid_subaddress
 - default_from, default_to
+
+## 8. Public examples and diagnostics
+
+- Use placeholder e-addresses, registration numbers, message IDs, and payloads
+  in documentation and tests.
+- Never commit credentials, certificates, private keys, production messages, or
+  organization-specific debug output.
+- Treat `EADRESE_DEBUG_DIR` output as sensitive and keep it outside the
+  repository.

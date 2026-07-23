@@ -1,8 +1,9 @@
 # Latvian E-Invoice & E-Address SDK (experimental)
 
-A work-in-progress Python client for Latvia's E-Address (VRAA VUS / DIV) and VID EDS e-invoice integration.
-This is NOT an official implementation. It is partially reverse-engineered (wiresharked) from official Java/.NET flows
-and XSD/WSDL documents. Use at your own risk.
+A work-in-progress Python client for Latvia's E-Address (VRAA VUS / DIV) and
+VID EDS e-invoice integration. This is **not** an official implementation. It
+was developed from published schemas, WSDL documents, and interoperability
+testing with the official Java/.NET flows. Use it at your own risk.
 
 Status / caveats
 - Experimental and not fully tested end-to-end.
@@ -32,28 +33,35 @@ Status / caveats
 > **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
 > Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `search_addressee()` instead.
 
-## Validation status (2026-04-11)
-- Unit tests (`pytest`) pass.
-- DIV AES-CBC and AES-GCM attachment decrypt/encrypt paths validated with real inbox messages.
-- `ConfirmMessage` (XAdES signature) validated end-to-end.
-- GCM attachment send path still has schema/profile caveats in some clients; `oaep_cbc` remains the safer mode.
+## Validation status
 
-## Support / Donate (Overall)
-If this SDK helps your work and you want to support further development:
-- https://revolut.me/guntisha2j
+- Python and PHP unit tests cover message building, signing helpers, chunked
+  attachments, MTOM/XOP receive parsing, GZIP handling, directory paging,
+  notifications, and reply references.
+- DIV AES-CBC and AES-GCM attachment decrypt/encrypt paths and
+  `ConfirmMessage` have previously been exercised against VRAA TEST.
+- GCM attachment sending can still have profile caveats in some clients;
+  `oaep_cbc` remains the safer interoperability mode.
+- Run the local test suites before relying on a checkout; no live credentials
+  or endpoint availability are implied by a passing unit test.
 
 VRAA operational notes (from support replies)
 - For EINVOICE, the VID subaddress is mandatory; add it manually or enable automatic VID recipient insertion.
 - Test environment message retrieval window is 2 days; replies are sent to the sender e-address.
 
 ## What it does
-- Implements VUS UnifiedService SOAP calls (SendMessage, GetNextMessage, ConfirmMessage, SearchAddressee).
+- Implements VUS UnifiedService message send/list/get/confirm operations,
+  notifications, server confirmations, addressee search, and initial/delta
+  directory synchronization.
 - Builds DIV Envelope (SenderDocument, Signatures, AttachmentsInput) according to DIV XSD.
 - Signs SenderDocument with XMLDSig + XAdES-BES (RSA-SHA512, SHA-512 digests; XAdES v1.3.2 SignedProperties).
 - Adds WS-Security signature to the SOAP header (RSA-SHA1/SHA1) with Timestamp + To, matching the Java profile.
 - Supports mTLS client auth; OAuth2 client-credentials token is optional when required by the environment.
 - Optional outbound attachment encryption with per-recipient `EncryptionInfo` (`gcm` and DIV-aligned `oaep_cbc`).
 - Inbound attachment decryption for DIV AES-CBC + RSA-OAEP (SHA1) key wrapping with optional GZIP decompression.
+- MTOM/XOP receive parsing and separate attachment-section stitching.
+- Reply linkage through
+  `CommonMetadata.DocumentReferences.ReferenceEntry.RefRegistrationNumber`.
 - Optional VID subaddress auto-add for EINVOICE.
 
 ## How it works (high level)
@@ -70,7 +78,7 @@ VRAA operational notes (from support replies)
 - TLS: mutual TLS (client cert + key).
 
 ## Requirements
-- Python 3.9+.
+- Python 3.10+.
 - `xmlsec` is required for XML signature paths (SenderDocument and WSSE signing/confirm flows).
 - For mTLS + WSSE, provide PEM certificate/key files with a private key.
 
@@ -95,7 +103,7 @@ cfg = EAddressConfig(
     client_key_path="/path/to/client.key.pem",
     certificate="/path/to/client.crt.pem",
     private_key="/path/to/client.key.pem",
-    verify_ssl=False,  # True in PROD
+    verify_ssl=True,
 )
 
 client = EAddressClient(cfg)
@@ -104,6 +112,8 @@ client.send_message(
     document_kind_code="DOC_EMPTY",
     subject="Hello",
     body_text="Smoke test",
+    # Set for replies:
+    # reference_id="<ORIGINAL_MESSAGE_ID>",
 )
 ```
 
@@ -113,8 +123,8 @@ cfg = EAddressConfig(
     client_id="YOUR_ID",
     client_secret="YOUR_SECRET",
     wsse_signing=True,
-    wsdl_url="https://div.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
-    token_url="https://div.vraa.gov.lv/Auth/token",
+    wsdl_url="https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
+    token_url="https://divtest.vraa.gov.lv/Auth/token",
     client_cert_path="/path/to/client.crt.pem",
     client_key_path="/path/to/client.key.pem",
     certificate="/path/to/client.crt.pem",
@@ -131,8 +141,9 @@ cfg = EAddressConfig(
 An experimental PHP client lives under `php/`.
 It is a standalone SDK and is not coupled to the Odoo module.
 It focuses on direct SOAP (mTLS + WSSE + DIV signing) flows and no longer includes the Java sidecar-dependent variant.
-Direct SOAP operations for `SendMessage`, `GetMessageList`, `GetMessage`, `GetAttachmentSection`, and `ConfirmMessage`
-are implemented; receive/decrypt/confirm smoke is validated, while broader stress coverage is still recommended.
+The PHP client covers the same public VUS operation families as the Python
+client and supports the same reply-reference metadata. Receive/decrypt/confirm
+smoke has been validated, while broader stress coverage is still recommended.
 See `php/README.md` for Docker-based testing and PHP-specific usage notes.
 
 ## Testing
@@ -146,8 +157,11 @@ composer install
 composer test
 ```
 
-### Support Python Development
-- https://revolut.me/guntisha2j
+## Public repository hygiene
 
-### Support PHP Development
-- https://revolut.me/guntisha2j
+- Examples and tests use placeholders or reserved-looking synthetic values.
+- Never commit certificates, private keys, OAuth credentials, `.env` files,
+  production message payloads, organization-specific addresses, or customer
+  identifiers.
+- Debug output must be written outside the repository and reviewed before it is
+  shared.

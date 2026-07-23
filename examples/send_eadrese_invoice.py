@@ -1,26 +1,51 @@
-"""Sends an e-invoice (XML + PDF) to e-adrese DIV sandbox and prints message ID."""
+"""Send an XML/PDF e-invoice to the DIV TEST environment."""
+
+import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from latvian_einvoice import Attachment, EAddressClient, EAddressConfig
 
-# Sandbox (DIV) credentials - replace with real ones in production
-cfg = EAddressConfig(
-    client_id="demo-client",
-    client_secret="demo-secret",
-    verify_ssl=False,  # DIV sandbox may use self-signed certs
-)
 
+def required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Set {name} before running this TEST-only example")
+    return value
+
+
+def require_test_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname != "divtest.vraa.gov.lv":
+        raise RuntimeError("This example is restricted to the DIV TEST HTTPS endpoint")
+    return value
+
+
+wsdl_url = os.environ.get(
+    "EADRESE_TEST_WSDL_URL",
+    "https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
+)
+token_url = os.environ.get(
+    "EADRESE_TEST_TOKEN_URL",
+    "https://divtest.vraa.gov.lv/Auth/token",
+)
+wsdl_url = require_test_url(wsdl_url)
+token_url = require_test_url(token_url)
+
+cfg = EAddressConfig(
+    client_id=required_env("EADRESE_CLIENT_ID"),
+    client_secret=required_env("EADRESE_CLIENT_SECRET"),
+    wsdl_url=wsdl_url,
+    token_url=token_url,
+    verify_ssl=True,
+)
 client = EAddressClient(cfg)
 
-# Prepare attachments
 xml_attachment = Attachment.from_file(Path("sample.xml"), "application/xml")
 pdf_attachment = Attachment.from_file(Path("sample.pdf"), "application/pdf")
 
-# Send message
-audience_code = "010170-12345"  # test recipient personal code in DIV
-msg_id = client.send_message(
-    recipient_personal_code=audience_code,
+message_id = client.send_message(
+    recipient_personal_code=required_env("EADRESE_TEST_RECIPIENT"),
     attachments=[xml_attachment, pdf_attachment],
 )
-
-print("Message sent successfully, ID:", msg_id)
+print("Message sent successfully, ID:", message_id)
