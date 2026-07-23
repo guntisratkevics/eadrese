@@ -16,7 +16,7 @@ from latvian_einvoice.soap.client import SignOnlySignature
 from zeep import ns
 
 
-def _self_signed_cert(tmpdir: Path):
+def _self_signed_cert(tmpdir: Path, password: bytes | None = None):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name(
         [
@@ -38,7 +38,11 @@ def _self_signed_cert(tmpdir: Path):
     key_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
+        encryption_algorithm=(
+            serialization.BestAvailableEncryption(password)
+            if password
+            else serialization.NoEncryption()
+        ),
     )
     cert_pem = cert.public_bytes(serialization.Encoding.PEM)
     key_file = tmpdir / "key.pem"
@@ -73,3 +77,25 @@ def test_signonlysignature_adds_signature_and_headers(tmp_path):
     assert bst is not None
     ts = security.find(f".//{{{ns.WSU}}}Timestamp")
     assert ts is not None
+
+
+def test_signonlysignature_supports_encrypted_private_key(tmp_path):
+    password = b"test-key-password"
+    key_file, cert_file = _self_signed_cert(tmp_path, password=password)
+    signer = SignOnlySignature(
+        str(key_file),
+        str(cert_file),
+        add_timestamp=True,
+        verify_response=False,
+        key_password=password,
+    )
+
+    soap_env = "http://schemas.xmlsoap.org/soap/envelope/"
+    envelope = etree.Element(QName(soap_env, "Envelope"), nsmap={"soap": soap_env})
+    etree.SubElement(envelope, QName(soap_env, "Header"))
+    body = etree.SubElement(envelope, QName(soap_env, "Body"))
+    etree.SubElement(body, "TestPayload").text = "ok"
+
+    signed, _ = signer.apply(envelope, headers={})
+
+    assert signed.find(f".//{{{ns.DS}}}Signature") is not None

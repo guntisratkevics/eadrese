@@ -108,19 +108,27 @@ def _enc_key_input_to_bytes(enc_key: str | bytes | bytearray) -> bytes:
         return raw
 
 
+def _load_private_key(pem: bytes, password: Optional[bytes] = None):
+    """Load a PEM private key, supporting optional password-encrypted keys."""
+    return serialization.load_pem_private_key(pem, password=password, backend=default_backend())
+
+
 def decrypt_key_with_private(
     private_key_pem: bytes,
     enc_key_b64: str | bytes | bytearray,
+    key_password: Optional[bytes] = None,
 ) -> bytes:
-    private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
+    private_key = _load_private_key(private_key_pem, key_password)
     return private_key.decrypt(_enc_key_input_to_bytes(enc_key_b64), asym_padding.PKCS1v15())
 
 
 def decrypt_key_with_private_oaep_sha1(
     private_key_pem: bytes,
     enc_key_b64: str | bytes | bytearray,
+    key_password: Optional[bytes] = None,
 ) -> bytes:
-    private_key = serialization.load_pem_private_key(private_key_pem, password=None, backend=default_backend())
+    # SHA-1 is required by the VRAA DIV oaep_cbc spec — not replaceable.
+    private_key = _load_private_key(private_key_pem, key_password)
     return private_key.decrypt(
         _enc_key_input_to_bytes(enc_key_b64),
         asym_padding.OAEP(

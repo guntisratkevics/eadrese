@@ -1184,6 +1184,30 @@ final class DirectSoapClient
         return is_string($updated) && $updated !== '' ? $updated : $requestXml;
     }
 
+    private static function appendReplyReference(
+        \DOMDocument $document,
+        \DOMElement $documentMetadata,
+        ?string $referenceId
+    ): void {
+        $referenceText = trim((string)($referenceId ?? ''));
+        if ($referenceText === '') {
+            return;
+        }
+
+        $common = $document->createElementNS(self::NS_DIV, 'CommonMetadata');
+        $references = $document->createElementNS(self::NS_DIV, 'DocumentReferences');
+        $referenceEntry = $document->createElementNS(self::NS_DIV, 'ReferenceEntry');
+        $referenceNumber = $document->createElementNS(
+            self::NS_DIV,
+            'RefRegistrationNumber'
+        );
+        $referenceNumber->appendChild($document->createTextNode($referenceText));
+        $referenceEntry->appendChild($referenceNumber);
+        $references->appendChild($referenceEntry);
+        $common->appendChild($references);
+        $documentMetadata->appendChild($common);
+    }
+
     /**
      * @param string[] $recipients
      * @return array{status:int, body:array|null, raw:string, request_xml:string, message_id:string}
@@ -1194,7 +1218,8 @@ final class DirectSoapClient
         string $bodyText = '',
         string $documentKindCode = 'DOC_EMPTY',
         bool $notifySenderOnDelivery = true,
-        ?string $traceText = null
+        ?string $traceText = null,
+        ?string $referenceId = null
     ): array {
         $endpoint = $this->endpointFromWsdl($this->cfg->wsdlUrl);
 
@@ -1242,6 +1267,8 @@ final class DirectSoapClient
         $general->appendChild($docKind);
         $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Description', $bodyText));
         $general->appendChild($divDoc->createElementNS(self::NS_DIV, 'Title', $subject));
+
+        self::appendReplyReference($divDoc, $docMeta, $referenceId);
 
         $senderTransport = $divDoc->createElementNS(self::NS_DIV, 'SenderTransportMetadata');
         $senderTransport->appendChild($divDoc->createElementNS(self::NS_DIV, 'SenderE-Address', $senderAddr));

@@ -7,6 +7,7 @@ import uuid
 import hashlib
 import ssl
 from pathlib import Path
+from typing import Optional
 import requests
 from zeep import Client, Plugin, Settings, ns
 from zeep.plugins import HistoryPlugin
@@ -34,7 +35,7 @@ except ImportError:  # pragma: no cover - optional dependency
 DIV_NS = "http://ivis.eps.gov.lv/XMLSchemas/100001/DIV/v1-0"
 
 
-def _safe_debug_token(value: str | None, fallback: str = "message") -> str:
+def _safe_debug_token(value: Optional[str], fallback: str = "message") -> str:
     text = (value or "").strip()
     safe = "".join(ch if ch.isalnum() else "_" for ch in text)
     return safe or fallback
@@ -54,7 +55,13 @@ def _persist_debug_soap_request(envelope) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         safe_name = _safe_debug_token(f"{operation_name}_{sender_ref}", fallback=operation_name)
         request_xml = etree.tostring(envelope, encoding="utf-8", xml_declaration=False)
-        (out_dir / f"soap_{safe_name}_request.xml").write_bytes(request_xml)
+        debug_file = out_dir / f"soap_{safe_name}_request.xml"
+        debug_file.write_bytes(request_xml)
+        # Restrict to owner-only: SOAP envelopes may contain encryption keys and signatures.
+        try:
+            debug_file.chmod(0o600)
+        except OSError:
+            pass
     except Exception:
         logging.getLogger(__name__).exception("Failed to persist e-adrese SOAP request debug XML")
 
@@ -65,8 +72,9 @@ class SenderDocumentSigner(Plugin):
         self,
         key_file: str,
         cert_file: str,
-        chain_file: str | None = None,
+        chain_file: Optional[str] = None,
         sig_hash: str = "sha512",
+        key_password: Optional[bytes] = None,
     ):
         if xmlsec is None:
             raise ImportError("xmlsec is required for signing (install python-xmlsec)")
@@ -175,7 +183,7 @@ class SenderDocumentSigner(Plugin):
             try:
                 key_bytes = Path(key_file).read_bytes()
                 self._private_key = serialization.load_pem_private_key(
-                    key_bytes, password=None
+                    key_bytes, password=key_password
                 )
             except Exception:
                 self._private_key = None
@@ -381,12 +389,13 @@ class SignOnlySignature(Signature):
         *,
         add_timestamp: bool = False,
         verify_response: bool = False,
-        trust_store_path: str | None = None,
-        response_cert_path: str | None = None,
+        trust_store_path: Optional[str] = None,
+        response_cert_path: Optional[str] = None,
         sender_sig_hash: str = "sha512",
         signature_method=None,
         digest_method=None,
-        endpoint_url: str | None = None,
+        endpoint_url: Optional[str] = None,
+        key_password: Optional[bytes] = None,
     ):
         if xmlsec is None:
             raise ImportError("xmlsec is required for WS-Security signatures (install python-xmlsec)")
@@ -431,11 +440,21 @@ class SignOnlySignature(Signature):
         self._add_timestamp = add_timestamp
         self._verify_response = verify_response
         self._endpoint_url = endpoint_url
+        self._key_password = (
+            key_password.decode("utf-8")
+            if isinstance(key_password, bytes)
+            else key_password
+        )
         self._sender_doc_signer = SenderDocumentSigner(
             self.key_file,
             self.certfile,
             self._trust_store_path,
             sender_sig_hash,
+            key_password=(
+                key_password.encode("utf-8")
+                if isinstance(key_password, str)
+                else key_password
+            ),
         )
 
     def verify(self, envelope):
@@ -585,7 +604,11 @@ class SignOnlySignature(Signature):
         security.append(signature)
 
         ctx = xmlsec.SignatureContext()
-        key = xmlsec.Key.from_file(self.key_file, xmlsec.KeyFormat.PEM)
+        key = xmlsec.Key.from_file(
+            self.key_file,
+            xmlsec.KeyFormat.PEM,
+            self._key_password,
+        )
         key.load_cert_from_file(self.certfile, xmlsec.KeyFormat.PEM)
         ctx.key = key
 
@@ -668,6 +691,7 @@ class SoapClient:
                 # Endpoint URL for wsa:To — must match the actual service endpoint
                 _wsdl = cfg.local_wsdl_url or cfg.wsdl_url or ""
                 _endpoint = _wsdl.replace("?wsdl", "").rstrip("/")
+                _key_pwd = cfg.key_password.encode() if isinstance(cfg.key_password, str) else cfg.key_password
                 # Signature expects key file first, certificate second
                 wsse = SignOnlySignature(
                     str(cfg.private_key),
@@ -678,6 +702,7 @@ class SoapClient:
                     response_cert_path=str(cfg.response_cert_path) if cfg.response_cert_path else None,
                     sender_sig_hash=cfg.sender_sig_hash,
                     endpoint_url=_endpoint or None,
+                    key_password=_key_pwd,
                 )
             self._wsse = wsse
 

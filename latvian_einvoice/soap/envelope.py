@@ -26,6 +26,7 @@ def build_envelope(
     recipient_entries: Optional[Sequence[Mapping[str, object]]] = None,
     trace_text: str | None = "Created",
     notify_sender_on_delivery: bool = False,
+    reference_id: str | None = None,
     symmetric_key_bytes: Optional[bytes] = None,
     symmetric_iv_bytes: Optional[bytes] = None,
     encryption_mode: str = "gcm",
@@ -43,14 +44,15 @@ def build_envelope(
         cbc_iv = os.urandom(16)
 
     for idx, att in enumerate(attachments, start=1):
-        payload_bytes = att.content
+        original_bytes = att.content
+        payload_bytes = original_bytes
         iv = cipher_with_tag = None
         # Encrypt payload if we have a symmetric key
         if symmetric_key_bytes:
             if use_cbc:
-                payload_bytes = encrypt_payload_aes_cbc_pkcs5(symmetric_key_bytes, cbc_iv, att.content)
+                payload_bytes = encrypt_payload_aes_cbc_pkcs5(symmetric_key_bytes, cbc_iv, original_bytes)
             else:
-                iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, att.content)
+                iv, cipher_with_tag = encrypt_payload_aes_gcm(symmetric_key_bytes, original_bytes)
                 payload_bytes = cipher_with_tag
 
         content_id = str(idx - 1)
@@ -79,12 +81,12 @@ def build_envelope(
             }
         )
         digest_b64_payload = base64.b64encode(
-            getattr(att, "sha512_digest")() if not symmetric_key_bytes else __import__("hashlib").sha512(payload_bytes).digest()
+            getattr(att, "sha512_digest")() if hasattr(att, "sha512_digest") else __import__("hashlib").sha512(original_bytes).digest()
         ).decode("ascii")
         files.append(
             {
-                "MimeType": _normalize_mime_type(att.content_type, bool(symmetric_key_bytes)),
-                "Size": len(payload_bytes),
+                "MimeType": att.content_type or "application/octet-stream",
+                "Size": len(original_bytes),
                 "Name": att.filename,
                 "Content": {
                     "ContentReference": content_id,
@@ -115,7 +117,18 @@ def build_envelope(
     # Include PayloadReference only when attachments exist.
     if files:
         document_metadata["PayloadReference"] = {"File": files}
-    
+    reference_text = (reference_id or "").strip()
+    if reference_text:
+        document_metadata["CommonMetadata"] = {
+            "DocumentReferences": {
+                "ReferenceEntry": [
+                    {
+                        "RefRegistrationNumber": reference_text,
+                    }
+                ]
+            }
+        }
+
     transport_recipient_entries = []
     for entry in recipient_entries or []:
         if not isinstance(entry, Mapping):

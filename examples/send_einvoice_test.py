@@ -1,50 +1,66 @@
-import os
-import logging
-import pytest
-pytest.importorskip("xmlsec")
+"""Send a synthetic UBL e-invoice to the DIV TEST environment."""
 
-from latvian_einvoice import EAddressClient, EAddressConfig, Attachment
+import logging
+import os
+from urllib.parse import urlparse
+
+from latvian_einvoice import Attachment, EAddressClient, EAddressConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("example_einvoice")
 
-def main():
-    client_id = os.getenv("EADRESE_CLIENT_ID", "your-client-id")
-    client_secret = os.getenv("EADRESE_CLIENT_SECRET", "your-secret")
-    
+
+def required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Set {name} before running this TEST-only example")
+    return value
+
+
+def require_test_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname != "divtest.vraa.gov.lv":
+        raise RuntimeError("This example is restricted to the DIV TEST HTTPS endpoint")
+    return value
+
+
+def main() -> None:
+    wsdl_url = os.environ.get(
+        "EADRESE_TEST_WSDL_URL",
+        "https://divtest.vraa.gov.lv/Vraa.Div.WebService.UnifiedInterface/UnifiedService.svc?wsdl",
+    )
+    token_url = os.environ.get(
+        "EADRESE_TEST_TOKEN_URL",
+        "https://divtest.vraa.gov.lv/Auth/token",
+    )
+    wsdl_url = require_test_url(wsdl_url)
+    token_url = require_test_url(token_url)
+
     cfg = EAddressConfig(
-        client_id=client_id,
-        client_secret=client_secret,
-        verify_ssl=False,
-        vid_subaddress_auto=True # Automatically add VID as recipient
+        client_id=required_env("EADRESE_CLIENT_ID"),
+        client_secret=required_env("EADRESE_CLIENT_SECRET"),
+        wsdl_url=wsdl_url,
+        token_url=token_url,
+        verify_ssl=True,
+        vid_subaddress_auto=True,
     )
-    
     client = EAddressClient(cfg)
-    sender = cfg.default_from
-    recipient = cfg.default_to
-    
-    # Mock UBL invoice content
-    ubl_content = b"""<?xml version="1.0" encoding="UTF-8"?><Invoice>...</Invoice>"""
-    
-    att = Attachment(
+    recipient = required_env("EADRESE_TEST_RECIPIENT")
+    attachment = Attachment(
         filename="invoice.xml",
-        content=ubl_content,
-        content_type="application/xml"
+        content=b'<?xml version="1.0" encoding="UTF-8"?><Invoice>synthetic-test-data</Invoice>',
+        content_type="application/xml",
     )
-    
-    logger.info(f"Sending E-INVOICE from {sender} to {recipient} (plus VID)")
-    
-    try:
-        msg_id = client.send_message(
-            recipient_personal_code=recipient,
-            document_kind_code="EINVOICE",
-            subject="Invoice #12345",
-            body_text="Please find attached invoice.",
-            attachments=[att]
-        )
-        logger.info(f"E-Invoice sent! MessageID: {msg_id}")
-    except Exception as e:
-        logger.error(f"Failed to send invoice: {e}")
+
+    message_id = client.send_message(
+        recipient_personal_code=recipient,
+        document_kind_code="EINVOICE",
+        subject="Synthetic TEST invoice",
+        body_text="Synthetic invoice for TEST environment interoperability checks.",
+        attachments=[attachment],
+    )
+    logger.info("E-invoice sent. MessageID: %s", message_id)
+
 
 if __name__ == "__main__":
     main()

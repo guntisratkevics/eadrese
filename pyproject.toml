@@ -1,15 +1,16 @@
 [project]
 name = "latvian-einvoice"
 description = "Unified Python SDK for Latvia's e-adrese (VRAA VUS) and VID EDS e-Invoice API"
-authors = [{ name = "guntisratkevics", email = "guntis.rat@gmail.com" }]
+authors = [{ name = "Latvian E-Address SDK contributors" }]
 readme = "README.md"
-license = { text = "MIT" }
-requires-python = ">=3.9"
+license = "MIT"
+requires-python = ">=3.10"
 dependencies = [
   "zeep>=4.2",
   "requests>=2.31",
   "python-dateutil>=2.9",
   "cryptography>=42.0",
+  "xmlsec>=1.3.14",
 ]
 dynamic = ["version"]
 
@@ -23,6 +24,9 @@ Bug_Tracker = "https://github.com/guntisratkevics/eadrese/issues"
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "no-local-version"
+
+[tool.setuptools.packages.find]
+include = ["latvian_einvoice*"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel", "setuptools-scm"]

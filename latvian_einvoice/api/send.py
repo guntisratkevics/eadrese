@@ -410,6 +410,7 @@ def send_message(
     trace_text: str = "Created",
     notify_sender_on_delivery: bool = False,
     sender_address: str | None = None,
+    reference_id: str | None = None,
     document_kind_code: str = "EINVOICE",
     subject: str = "Electronic invoice",
     body_text: str = "Please see the attached e-invoice.",
@@ -433,7 +434,7 @@ def send_message(
             recipients.append(vid_addr)
 
     mode = (encryption_mode or cfg.outbound_encryption or "gcm").lower()
-    enc_key_b64 = encryption_key_b64
+    enc_key_b64 = encryption_key_b64  # gitleaks:allow -- runtime encrypted key, not a literal secret
     thumb_b64 = recipient_thumbprint_b64
     sym_key = symmetric_key_bytes
     sym_iv = symmetric_iv_bytes
@@ -496,6 +497,7 @@ def send_message(
         recipient_entries=recipient_transport_entries,
         trace_text=trace_text,
         notify_sender_on_delivery=notify_sender_on_delivery,
+        reference_id=reference_id,
         symmetric_key_bytes=sym_key,
         symmetric_iv_bytes=sym_iv,
         encryption_mode=mode,

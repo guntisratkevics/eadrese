@@ -48,4 +48,24 @@ final class EnvelopeBuilderMimeTypeTest extends TestCase
         $this->assertSame('text/plain', $file['MimeType']);
     }
 
+    public function test_reply_reference_is_added_to_common_metadata(): void
+    {
+        [$envelope] = Builder::buildEnvelope(
+            senderEAddress: '_DEFAULT@40000000000',
+            recipients: ['_DEFAULT@40000000001'],
+            documentKindCode: 'DOC_EMPTY',
+            subject: 'Re: Test',
+            bodyText: 'Reply body',
+            referenceId: 'ORIGINAL-MESSAGE-ID-001'
+        );
+
+        $references = $envelope['SenderDocument']['DocumentMetadata']
+            ['CommonMetadata']['DocumentReferences']['ReferenceEntry'];
+
+        $this->assertSame(
+            [['RefRegistrationNumber' => 'ORIGINAL-MESSAGE-ID-001']],
+            $references
+        );
+    }
+
 }

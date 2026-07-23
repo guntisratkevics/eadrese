@@ -30,6 +30,17 @@ config = EAddressConfig(client_id="ID", client_secret="SECRET", token_url="...")
 `wsse_verify=True` enables basic signature verification against a trust store or explicit server cert.
 OCSP validation is best-effort and disabled by default.
 
+## Secrets and debug artifacts
+
+- Load OAuth secrets, certificate passwords, and key paths from a secret store
+  or environment variables; never hard-code them.
+- Keep PEM/PFX files, `.env` files, raw SOAP envelopes, production messages,
+  and customer payloads outside the repository.
+- `EADRESE_DEBUG_DIR` can contain message metadata and payload details. Point it
+  to a protected temporary directory and review every artifact before sharing.
+- Documentation and tests must use synthetic identifiers and placeholder
+  e-addresses.
+
 ## PFX to PEM Conversion
 If you have a PFX (PKCS#12) file, convert it to PEM format using OpenSSL:
 
