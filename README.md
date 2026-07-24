@@ -1,5 +1,7 @@
 # Latvian E-Invoice & E-Address SDK (experimental)
 
+[![CI](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml/badge.svg)](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml)
+
 A work-in-progress Python client for Latvia's E-Address (VRAA VUS / DIV) and
 VID EDS e-invoice integration. This is **not** an official implementation. It
 was developed from published schemas, WSDL documents, and interoperability
@@ -12,6 +14,10 @@ Status / caveats
 
 ## Implemented operations
 
+`✅` means the operation is implemented in the current SDK. It does not by
+itself mean that a fresh live VRAA TEST integration run has been completed.
+Automated and historical integration coverage are listed separately below.
+
 | Operation | Method | Status |
 |-----------|--------|--------|
 | `SendMessage` | `client.send_message()` | ✅ |
@@ -21,7 +27,7 @@ Status / caveats
 | `ConfirmMessage` | `client.confirm_message()` | ✅ |
 | `SearchAddresseeUnit` | `client.search_addressee()` | ✅ |
 | `GetPublicKeyList` | internal (per-recipient EINVOICE encryption) | ✅ |
-| `CertValidate` | `client.cert_validate()` | ✅ (via SearchAddresseeUnit) |
+| Certificate/connectivity check | `client.cert_validate()` | ✅ Helper via `SearchAddresseeUnit` |
 | `GetNotificationList` | `client.get_notification_list()` | ✅ |
 | `ConfirmNotificationList` | `client.confirm_notification_list()` | ✅ |
 | `GetInitialAddresseeRecordList` | `client.get_initial_addressee_record_list()` | ✅ |
@@ -35,6 +41,9 @@ Status / caveats
 
 ## Validation status
 
+- GitHub Actions runs the Python test suite on Python 3.10, 3.11, and 3.12,
+  plus the PHP test suite on PHP 8.2, for pushes to `main` and pull requests.
+  The badge above shows the current result.
 - Python and PHP unit tests cover message building, signing helpers, chunked
   attachments, MTOM/XOP receive parsing, GZIP handling, directory paging,
   notifications, and reply references.
@@ -143,7 +152,8 @@ It is a standalone SDK and is not coupled to the Odoo module.
 It focuses on direct SOAP (mTLS + WSSE + DIV signing) flows and no longer includes the Java sidecar-dependent variant.
 The PHP client covers the same public VUS operation families as the Python
 client and supports the same reply-reference metadata. Receive/decrypt/confirm
-smoke has been validated, while broader stress coverage is still recommended.
+flows have previously been exercised against VRAA TEST; broader and current
+live integration coverage is still recommended.
 See `php/README.md` for Docker-based testing and PHP-specific usage notes.
 
 ## Testing

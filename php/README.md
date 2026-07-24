@@ -1,35 +1,49 @@
 # PHP client for Latvia's e-Address (DIV / VUS)
 
+[![CI](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml/badge.svg)](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml)
+
 Direct SOAP client for the VRAA DIV unified interface — mTLS, WSSE, XAdES envelope signing, message send/receive, attachment encryption, and addressee directory sync.
 This PHP SDK is standalone and is not coupled to the Odoo module.
 No Composer dependencies required for production use; a PSR-4 autoloader is bundled.
 
 ## Implemented operations
 
+`✅ Implemented` means the method exists in the current SDK. `✅ Unit tested`
+means it also has direct automated regression coverage. Neither label implies a
+fresh live VRAA TEST run; historical integration evidence is listed below.
+
 | Operation | Method | Status |
 |-----------|--------|--------|
-| `CertValidate` | `certValidateSoap()` | ✅ Validated |
-| `SendMessage` | `sendMessage()` / `sendTextMessageSoap()` | ✅ Validated |
-| `GetMessageList` | `getMessageListSoap()` | ✅ Validated |
-| `GetMessage` | `getMessageSoap()` | ✅ Validated |
+| Certificate/connectivity check | `certValidateSoap()` | ✅ Helper via `SearchAddresseeUnit` |
+| `SendMessage` | `sendMessage()` / `sendTextMessageSoap()` | ✅ Implemented |
+| `GetMessageList` | `getMessageListSoap()` | ✅ Implemented |
+| `GetMessage` | `getMessageSoap()` | ✅ Implemented |
 | `GetMessage + structured summary` | `getMessageAndFileInfoSoap()` | ✅ Local helper |
-| `GetAttachmentSection` | `getAttachmentSectionSoap()` | ✅ Validated |
-| `ConfirmMessage` | `confirmMessageSoap()` | ✅ Validated |
-| `SearchAddresseeUnit` | `searchAddresseeSoap()` | ✅ Validated |
-| `GetPublicKeyList` | `getPublicKeyListSoap()` | ✅ Validated |
-| `GetNotificationList` | `pollNotificationsSoap()` | ✅ Validated |
-| `ConfirmNotificationList` | `confirmNotificationListSoap()` | ✅ Validated |
-| `GetInitialAddresseeRecordList` | `getInitialAddresseeRecordListSoap()` | ✅ Validated |
-| `GetChangedAddresseeRecordList` | `getChangedAddresseeRecordListSoap()` | ✅ Validated (rate-limited by VRAA) |
-| `GetMessageServerConfirmation` | `getMessageServerConfirmationSoap()` | ✅ Validated |
-| `ValidateEAddress` | `validateEAddressSoap()` | ⚠️ Government accounts only |
-| `GetAddresseeUnit` | `getAddresseeUnitSoap()` | ⚠️ Government accounts only |
+| `GetAttachmentSection` | internal `DirectSoapClient::getAttachmentSection()` | ✅ Implemented |
+| `ConfirmMessage` | `confirmMessageSoap()` | ✅ Implemented |
+| `SearchAddresseeUnit` | `searchAddresseeSoap()` | ✅ Implemented |
+| `GetPublicKeyList` | `getPublicKeyListSoap()` | ✅ Implemented |
+| `GetNotificationList` | `getNotificationListSoap()` / `pollNotificationsSoap()` | ✅ Implemented |
+| `ConfirmNotificationList` | `confirmNotificationListSoap()` | ✅ Implemented |
+| `GetInitialAddresseeRecordList` | `getInitialAddresseeRecordListSoap()` | ✅ Implemented |
+| `GetChangedAddresseeRecordList` | `getChangedAddresseeRecordListSoap()` | ✅ Implemented; VRAA rate-limited |
+| `GetMessageServerConfirmation` | `getMessageServerConfirmationSoap()` | ✅ Implemented |
+| `ValidateEAddress` | `validateEAddressSoap()` | ✅ Implemented; ⚠️ government accounts only |
+| `GetAddresseeUnit` | `getAddresseeUnitSoap()` | ✅ Implemented; ⚠️ government accounts only |
 | Reply document reference | `sendMessage(..., referenceId: ...)` | ✅ Unit tested |
 
 > **`ValidateEAddress` / `GetAddresseeUnit`** require a government-account permission in VRAA.
 > Commercial clients receive "Lietotājam nav tiesības uz šo darbību". Use `SearchAddresseeUnit` instead.
 
 ## Validation status
+
+GitHub Actions currently validates:
+
+- Python unit tests on Python 3.10, 3.11, and 3.12
+- PHP syntax, Composer metadata, and PHPUnit on PHP 8.2
+
+These automated checks do not use live VRAA credentials or prove endpoint
+availability.
 
 Core operations have previously been exercised against the VRAA TEST endpoint
 from the Docker runner. These historical checks do not replace a current test
@@ -128,6 +142,8 @@ export DIV_CLIENT_KEY='/path/to/client.key.pem'
 export DIV_SIGN_CERT='/path/to/client.crt.pem'
 export DIV_SIGN_KEY='/path/to/client.key.pem'
 export DIV_SENDER='_PRIVATE@<REG_NO>'
+# VRAA TEST only: the VISS Root CA is not in the public CA store.
+# Prefer installing/trusting that CA and then set this to 1.
 export DIV_VERIFY_SSL=0
 
 php examples/soap_cert_validate.php
@@ -156,6 +172,8 @@ $config = new Config(
     clientKeyPath:   $key,   // mTLS
     certificatePath: $cert,  // XML signing
     privateKeyPath:  $key,   // XML signing
+    // VRAA TEST only while the VISS Root CA is not trusted locally.
+    // Install/trust the CA and use true whenever possible.
     verifySsl:       false,
     defaultFrom:     '_PRIVATE@<REG_NO>',
 );
@@ -253,6 +271,10 @@ test.sh                       — Docker-based test runner
 
 - No Composer required. The bundled PSR-4 autoloader resolves `LatvianEinvoice\*` from `src/`.
 - Private keys, certificates, and `.env.test` are excluded from version control via `.gitignore`.
+- The Docker TEST runner defaults `DIV_VERIFY_SSL=0` because the VISS Root CA
+  is not in the public CA store. Prefer installing that CA and enabling
+  verification. Never reuse disabled TLS verification with arbitrary or PROD
+  endpoints.
 - Keep organization-specific e-addresses, registration numbers, message IDs,
   and payload samples out of source, tests, README files, and committed debug
   artifacts.
