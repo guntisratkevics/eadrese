@@ -2,6 +2,12 @@
 
 [![CI](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml/badge.svg)](https://github.com/guntisratkevics/eadrese/actions/workflows/ci.yml)
 
+## Odoo 18 app
+
+For a ready-to-use Odoo integration, see
+[Latvia e-Address for Odoo 18 on the Odoo Apps Store](https://apps.odoo.com/apps/modules/18.0/eadrese).
+It brings secure e-Address messages and UBL e-invoices into the Odoo workflow.
+
 A work-in-progress Python client for Latvia's E-Address (VRAA VUS / DIV) and
 VID EDS e-invoice integration. This is **not** an official implementation. It
 was developed from published schemas, WSDL documents, and interoperability
