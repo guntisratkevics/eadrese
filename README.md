@@ -173,6 +173,13 @@ composer install
 composer test
 ```
 
+## Support development
+
+If this SDK helps your work and you want to support further development:
+
+- [Support Python SDK development via Revolut](https://revolut.me/guntisha2j)
+- [Support PHP SDK development via Revolut](https://revolut.me/guntisha2j)
+
 ## Public repository hygiene
 
 - Examples and tests use placeholders or reserved-looking synthetic values.
